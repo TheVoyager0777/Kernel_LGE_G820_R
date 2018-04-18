@@ -3680,6 +3680,18 @@ static void tcp_xmit_recovery(struct sock *sk, int rexmit)
 	tcp_xmit_retransmit_queue(sk);
 }
 
+/* Returns the number of packets newly acked or sacked by the current ACK */
+static u32 tcp_newly_delivered(struct sock *sk, u32 prior_delivered, int flag)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	u32 delivered;
+
+	delivered = tp->delivered - prior_delivered;
+	if (flag & FLAG_ECE)
+		tp->delivered_ce += delivered;
+	return delivered;
+}
+
 /* This routine deals with incoming acks, but not outgoing ones. */
 #ifdef CONFIG_LGP_DATA_TCPIP_MPTCP
 static int tcp_ack(struct sock *sk, struct sk_buff *skb, int flag)
