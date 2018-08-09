@@ -24,10 +24,10 @@ Start=$(date +"%s")
 
 make -j$(nproc --all) \
 	O=out \
-	CC="${ccache_} /home/user/桌面/123/gcl/linux-x86-refs_heads_master/clang-r437112/bin/clang" \
-	CLANG_TRIPLE=/home/user/桌面/123/cbl/bin/aarch64-linux-gnu- \
-	CROSS_COMPILE=/home/user/桌面/123/cbl/bin/aarch64-linux-gnu- \
-	CROSS_COMPILE_ARM32=/home/user/桌面/123/cbl/bin/arm-linux-gnueabi- || > build.log
+	CC="${ccache_} /bin/clang" \
+	CLANG_TRIPLE=aarch64-linux-gnu- \
+	CROSS_COMPILE=aarch64-linux-gnu- \
+	CROSS_COMPILE_ARM32=arm-linux-gnueabi- || > build.log
 
 exit_code=$?
 End=$(date +"%s")
