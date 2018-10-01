@@ -30,6 +30,8 @@ $(obj)/%.stub.o: $(obj)/%.o FORCE
 
 arm64-obj-$(CONFIG_COMPAT)		+= sys32.o signal32.o 	\
 					   sys_compat.o entry32.o
+ifneq ($(CONFIG_VDSO32),y)
+endif
 arm64-obj-$(CONFIG_COMPAT)		+= sigreturn32.o
 arm64-obj-$(CONFIG_COMPAT)		+= kuser32.o
 arm64-obj-$(CONFIG_FUNCTION_TRACER)	+= ftrace.o entry-ftrace.o
