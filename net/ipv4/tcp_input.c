@@ -3813,7 +3813,8 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		sk_dst_confirm(sk);
 
 	delivered = tp->delivered - delivered;	/* freshly ACKed or SACKed */
-	lost = tp->lost - lost;			/* freshly marked lost */
+	lost = tp->lost - lost;
+	rs.is_ece = !!(flag & FLAG_ECE);			/* freshly marked lost */
 	tcp_rate_gen(sk, delivered, lost, is_sack_reneg, sack_state.rate);
 	tcp_cong_control(sk, ack, delivered, flag, sack_state.rate);
 	tcp_xmit_recovery(sk, rexmit);
