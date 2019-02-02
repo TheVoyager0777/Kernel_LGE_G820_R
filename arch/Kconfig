@@ -1151,6 +1151,9 @@ config HAVE_ARCH_COMPILER_H
 config ARCH_HAS_RELR
 	bool
 
+config ARCH_USE_MEMREMAP_PROT
+	bool
+
 config RELR
 	bool "Use RELR relocation packing"
 	depends on ARCH_HAS_RELR && TOOLS_SUPPORT_RELR
