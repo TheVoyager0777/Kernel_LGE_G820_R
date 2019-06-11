@@ -679,7 +679,7 @@ config TCP_CONG_BBR
 config TCP_CONG_BBR2
 	tristate "BBR2 TCP"
 	default n
-	help
+	---help---
 
 	BBR2 TCP congestion control is a model-based congestion control
 	algorithm that aims to maximize network utilization, keep queues and
