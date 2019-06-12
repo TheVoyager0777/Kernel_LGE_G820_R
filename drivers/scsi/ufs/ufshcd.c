@@ -11479,6 +11479,7 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 
 	ufshcd_add_sysfs_nodes(hba);
 
+	device_enable_async_suspend(dev);
 #ifdef CONFIG_UFSDBG_SYSFS_COMMON
 	ufsdbg_add_sysfs_nodes(hba);
 	ufsdbg_procfs_create(hba);
@@ -11487,7 +11488,6 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 #ifdef CONFIG_UFSDBG_TUNABLES
 	ufsdbg_tunables_add_debugfs(hba, hba->debugfs_files.debugfs_root);
 #endif
-
 
 	return 0;
 
