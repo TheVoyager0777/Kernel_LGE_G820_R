@@ -89,9 +89,6 @@ static void dma_buf_release(struct dentry *dentry)
 {
 	struct dma_buf *dmabuf;
 
-	if (!is_dma_buf_file(file))
-		return -EINVAL;
-
 	dmabuf = dentry->d_fsdata;
 
 	BUG_ON(dmabuf->vmapping_counter);
@@ -116,7 +113,6 @@ static void dma_buf_release(struct dentry *dentry)
 	module_put(dmabuf->owner);
 	kfree(dmabuf->name);
 	kfree(dmabuf);
-	return 0;
 }
 
 static int dma_buf_file_release(struct inode *inode, struct file *file)

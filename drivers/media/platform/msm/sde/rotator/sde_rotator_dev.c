@@ -3614,6 +3614,7 @@ static int sde_rotator_probe(struct platform_device *pdev)
 		rot_dev->kthread_free[i] = true;
 	}
 
+	device_enable_async_suspend(&pdev->dev);
 #if IS_ENABLED(CONFIG_LGE_DISPLAY_COMMON)
 	rot_dev->notifier = panel_dead_noti_block;
 	if (lge_panel_notifier_register_client(&rot_dev->notifier))
