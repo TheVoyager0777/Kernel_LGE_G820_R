@@ -10,6 +10,9 @@
 #include "dsi_drm.h"
 #include "dsi_display.h"
 #include "sde_crtc.h"
+#ifdef CONFIG_DRM_SDE_EXPO
+#include "sde_expo_dim_layer.h"
+#endif
 
 #include "lge_brightness_def.h"
 #include "lge_brightness.h"
@@ -287,6 +290,10 @@ int lge_backlight_device_update_status(struct backlight_device *bd)
 		if (!bl_lvl && brightness)
 			bl_lvl = 1;
 	}
+
+#ifdef CONFIG_DRM_SDE_EXPO
+	bl_lvl = expo_calc_backlight(bl_lvl);
+#endif
 
 	mutex_lock(&display->display_lock);
 	if (panel->lge.allow_bl_update) { //TODO : Discuss condition state.
