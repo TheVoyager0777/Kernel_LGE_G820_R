@@ -177,8 +177,6 @@ static bool sub_boost_enabled = false;
 static unsigned int prec_boost_ms = 0;
 static unsigned int boost_step = 0;
 
-static struct work_struct input_boost_multi_step_work;
-
 static int set_sub_boost_freq(const char *buf, const struct kernel_param *kp)
 {
 	int i, ntokens = 0;
@@ -387,66 +385,6 @@ static void do_powerkey_input_boost(struct kthread_work *work)
 					msecs_to_jiffies(powerkey_input_boost_ms));
 }
 
-static void do_input_boost_multi_step(struct work_struct *work)
-{
-	unsigned int i, ret;
-	struct cpu_sync *i_sync_info;
-
-	cancel_delayed_work_sync(&input_boost_rem);
-	if (boost_step == 0) {
-		// step 1
-		pr_debug("Multi step boost: step 1\n");
-		if (sched_boost_active) {
-			sched_set_boost(0);
-			sched_boost_active = false;
-		}
-
-		for_each_possible_cpu(i) {
-			i_sync_info = &per_cpu(sync_info, i);
-			i_sync_info->input_boost_min = i_sync_info->input_boost_freq;
-		}
-
-		update_policy_online();
-
-		if (sched_boost_on_input > 0) {
-			ret = sched_set_boost(sched_boost_on_input);
-			if (ret)
-				pr_err("cpu-boost: HMP boost enable failed\n");
-			else
-				sched_boost_active = true;
-		}
-
-		if (sub_boost_enabled) {
-			boost_step = 1;
-			prec_boost_ms = 0;
-		}
-	} else if (boost_step == 1) {
-		// step 2
-		prec_boost_ms += MIN_INPUT_INTERVAL_MS;
-		if (prec_boost_ms >= MAX_PRECEDING_BOOST_TIME) {
-			pr_debug("Multi step boost: step 2\n");
-			for_each_possible_cpu(i) {
-				i_sync_info = &per_cpu(sync_info, i);
-				i_sync_info->input_boost_min = per_cpu(sub_boost_freq, i);
-			}
-
-			update_policy_online();
-
-			if (sched_boost_active) {
-				ret = sched_set_boost(0);
-				if (ret)
-					pr_err("cpu-boost: HMP boost disable failed\n");
-				sched_boost_active = false;
-			}
-
-			boost_step = 2;
-		}
-	}
-
-	queue_delayed_work(cpu_boost_wq, &input_boost_rem,
-					msecs_to_jiffies(input_boost_ms));
-}
-
 static void cpuboost_input_event(struct input_handle *handle,
 		unsigned int type, unsigned int code, int value)
 {
@@ -454,19 +392,6 @@ static void cpuboost_input_event(struct input_handle *handle,
 
 	if (!input_boost_enabled)
 		return;
-
-	{ // multi-step boost
-		now = ktime_to_us(ktime_get());
-		if (now - last_input_time < MIN_INPUT_INTERVAL_US)
-			return;
-
-		if (work_pending(&input_boost_multi_step_work))
-			return;
-
-		queue_work(cpu_boost_wq, &input_boost_multi_step_work);
-		last_input_time = ktime_to_us(ktime_get());
-		return;
-	}
 
 	now = ktime_to_us(ktime_get());
 	if (now - last_input_time < MIN_INPUT_INTERVAL)
@@ -485,6 +410,7 @@ static void cpuboost_input_event(struct input_handle *handle,
 	}
 	last_input_time = ktime_to_us(ktime_get());
 }
+
 
 void touch_irq_boost(void)
 {
@@ -625,7 +551,6 @@ static int cpu_boost_init(void)
 	kthread_init_work(&input_boost_work, do_input_boost);
 		kthread_init_work(&powerkey_input_boost_work, do_powerkey_input_boost);
 	INIT_DELAYED_WORK(&input_boost_rem, do_input_boost_rem);
-	INIT_WORK(&input_boost_multi_step_work, do_input_boost_multi_step);
 
 	for_each_possible_cpu(cpu) {
 		s = &per_cpu(sync_info, cpu);
