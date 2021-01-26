@@ -49,28 +49,6 @@ void f2fs_destroy_bioset(void)
 	bioset_free(f2fs_bioset);
 }
 
-static inline struct bio *__f2fs_bio_alloc(gfp_t gfp_mask,
-						unsigned int nr_iovecs)
-{
-	return bio_alloc_bioset(gfp_mask, nr_iovecs, f2fs_bioset);
-}
-
-static struct bio *f2fs_bio_alloc(struct f2fs_sb_info *sbi, int npages,
-		bool noio)
-{
-	if (noio) {
-		/* No failure on bio allocation */
-		return __f2fs_bio_alloc(GFP_NOIO, npages);
-	}
-
-	if (time_to_inject(sbi, FAULT_ALLOC_BIO)) {
-		f2fs_show_injection_info(sbi, FAULT_ALLOC_BIO);
-		return NULL;
-	}
-
-	return __f2fs_bio_alloc(GFP_KERNEL, npages);
-}
-
 static bool __is_cp_guaranteed(struct page *page)
 {
 	struct address_space *mapping = page->mapping;
@@ -421,7 +399,7 @@ static struct bio *__bio_alloc(struct f2fs_io_info *fio, int npages)
 	struct f2fs_sb_info *sbi = fio->sbi;
 	struct bio *bio;
 
-	bio = f2fs_bio_alloc(sbi, npages, true);
+	bio = bio_alloc_bioset(GFP_NOIO, npages, f2fs_bioset);
 
 	f2fs_target_device(sbi, fio->new_blkaddr, bio);
 	if (is_read_io(fio->op)) {
