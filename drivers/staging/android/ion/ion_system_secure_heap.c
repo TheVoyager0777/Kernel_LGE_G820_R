@@ -113,13 +113,8 @@ static void process_one_prefetch(struct ion_heap *sys_heap,
 	memset(&buffer, 0, sizeof(struct ion_buffer));
 	buffer.heap = sys_heap;
 
-#ifndef CONFIG_MIGRATE_HIGHORDER
 	ret = sys_heap->ops->allocate(sys_heap, &buffer, info->size,
 					buffer.flags);
-#else
-	ret = sys_heap->ops->allocate(sys_heap, &buffer, info->size,
-					info->vmid);
-#endif
 	if (ret) {
 		pr_debug("%s: Failed to prefetch %#llx, ret = %d\n",
 			 __func__, info->size, ret);
@@ -361,19 +356,11 @@ static int ion_system_secure_heap_pm_freeze(struct ion_heap *heap)
 {
 	struct ion_system_secure_heap *secure_heap;
 	unsigned long count;
-	long sz;
 	struct shrink_control sc = {
 		.gfp_mask = GFP_HIGHUSER,
 	};
 
 	secure_heap = container_of(heap, struct ion_system_secure_heap, heap);
-
-	sz = atomic_long_read(&heap->total_allocated);
-	if (sz) {
-		pr_err("%s: %lx bytes won't be saved across hibernation. Aborting.",
-		       __func__, sz);
-		return -EINVAL;
-	}
 
 	/* Since userspace is frozen, no more requests will be queued */
 	cancel_delayed_work_sync(&secure_heap->prefetch_work);
@@ -416,7 +403,7 @@ struct ion_heap *ion_system_secure_heap_create(struct ion_platform_heap *unused)
 	heap->sys_heap = get_ion_heap(ION_SYSTEM_HEAP_ID);
 
 	heap->destroy_heap = false;
-	heap->work_lock = __SPIN_LOCK_UNLOCKED(heap->work_lock);
+	heap->work_lock = (spinlock_t)__SPIN_LOCK_UNLOCKED(heap->work_lock);
 	INIT_LIST_HEAD(&heap->prefetch_list);
 	INIT_DELAYED_WORK(&heap->prefetch_work,
 			  ion_system_secure_heap_prefetch_work);
@@ -440,12 +427,9 @@ struct page *alloc_from_secure_pool_order(struct ion_system_heap *heap,
 struct page *split_page_from_secure_pool(struct ion_system_heap *heap,
 					 struct ion_buffer *buffer)
 {
-#ifndef CONFIG_ALLOC_BUFFERS_IN_4K_CHUNKS
-	int i;
-#endif
-	int j;
+	int i, j;
 	struct page *page;
-	unsigned int order = 0;
+	unsigned int order;
 
 	mutex_lock(&heap->split_page_mutex);
 
@@ -459,7 +443,6 @@ struct page *split_page_from_secure_pool(struct ion_system_heap *heap,
 	if (!IS_ERR(page))
 		goto got_page;
 
-#ifndef CONFIG_ALLOC_BUFFERS_IN_4K_CHUNKS
 	for (i = NUM_ORDERS - 2; i >= 0; i--) {
 		order = orders[i];
 		page = alloc_from_secure_pool_order(heap, buffer, order);
@@ -469,7 +452,6 @@ struct page *split_page_from_secure_pool(struct ion_system_heap *heap,
 		split_page(page, order);
 		break;
 	}
-#endif
 	/*
 	 * Return the remaining order-0 pages to the pool.
 	 * SetPagePrivate flag to mark memory as secure.
