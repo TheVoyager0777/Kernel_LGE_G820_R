@@ -41,59 +41,7 @@
 /* PTWs cacheable, inner/outer WBWA */
 #define TCR_CACHE_FLAGS	TCR_IRGN_WBWA | TCR_ORGN_WBWA
 
-#ifdef CONFIG_KASAN_SW_TAGS
-#define TCR_KASAN_FLAGS TCR_TBI1
-#else
-#define TCR_KASAN_FLAGS 0
-#endif
-
 #define MAIR(attr, mt)	((attr) << ((mt) * 8))
-
-/*
- *	cpu_cache_off()
- *
- *	Turn the CPU D-cache off.
- */
-ENTRY(cpu_cache_off)
-	mrs	x0, sctlr_el1
-	bic	x0, x0, #1 << 2			// clear SCTLR.C
-	msr	sctlr_el1, x0
-	isb
-	ret
-ENDPROC(cpu_cache_off)
-
-/*
- *	cpu_reset(loc)
- *
- *	Perform a soft reset of the system.  Put the CPU into the same state
- *	as it would be if it had been reset, and branch to what would be the
- *	reset vector. It must be executed with the flat identity mapping.
- *
- *	- loc   - location to jump to for soft reset
- */
-	.align	5
-ENTRY(cpu_reset)
-	mrs	x1, sctlr_el1
-	bic	x1, x1, #1
-	msr	sctlr_el1, x1			// disable the MMU
-	isb
-	ret	x0
-ENDPROC(cpu_reset)
-
-ENTRY(cpu_soft_restart)
-	/* Save address of cpu_reset() and reset address */
-	mov	x19, x0
-	mov	x20, x1
-
-	/* Turn D-cache off */
-	bl	cpu_cache_off
-
-	/* Push out all dirty data, and ensure cache is empty */
-	bl	flush_cache_all
-
-	mov	x0, x20
-	ret	x19
-ENDPROC(cpu_soft_restart)
 
 /*
  *	cpu_do_idle()
@@ -111,8 +59,6 @@ ENDPROC(cpu_do_idle)
  * cpu_do_suspend - save CPU registers context
  *
  * x0: virtual address of context pointer
- *
- * This must be kept in sync with struct cpu_suspend_ctx in <asm/suspend.h>.
  */
 ENTRY(cpu_do_suspend)
 	mrs	x2, tpidr_el0
@@ -137,11 +83,6 @@ alternative_endif
 	stp	x8, x9, [x0, #48]
 	stp	x10, x11, [x0, #64]
 	stp	x12, x13, [x0, #80]
-	/*
-	 * Save x18 as it may be used as a platform register, e.g. by shadow
-	 * call stack.
-	 */
-	str	x18, [x0, #96]
 	ret
 ENDPROC(cpu_do_suspend)
 
@@ -158,13 +99,6 @@ ENTRY(cpu_do_resume)
 	ldp	x9, x10, [x0, #48]
 	ldp	x11, x12, [x0, #64]
 	ldp	x13, x14, [x0, #80]
-	/*
-	 * Restore x18, as it may be used as a platform register, and clear
-	 * the buffer to minimize the risk of exposure when used for shadow
-	 * call stack.
-	 */
-	ldr	x18, [x0, #96]
-	str	xzr, [x0, #96]
 	msr	tpidr_el0, x2
 	msr	tpidrro_el0, x3
 	msr	contextidr_el1, x4
@@ -311,14 +245,14 @@ ENTRY(idmap_kpti_install_ng_mappings)
 	/* We're the boot CPU. Wait for the others to catch up */
 	sevl
 1:	wfe
-	ldaxr	w17, [flag_ptr]
-	eor	w17, w17, num_cpus
-	cbnz	w17, 1b
+	ldaxr	w18, [flag_ptr]
+	eor	w18, w18, num_cpus
+	cbnz	w18, 1b
 
 	/* We need to walk swapper, so turn off the MMU. */
-	mrs	x17, sctlr_el1
-	bic	x17, x17, #SCTLR_ELx_M
-	msr	sctlr_el1, x17
+	mrs	x18, sctlr_el1
+	bic	x18, x18, #SCTLR_ELx_M
+	msr	sctlr_el1, x18
 	isb
 
 	/* Everybody is enjoying the idmap, so we can rewrite swapper. */
@@ -341,9 +275,9 @@ skip_pgd:
 	isb
 
 	/* We're done: fire up the MMU again */
-	mrs	x17, sctlr_el1
-	orr	x17, x17, #SCTLR_ELx_M
-	msr	sctlr_el1, x17
+	mrs	x18, sctlr_el1
+	orr	x18, x18, #SCTLR_ELx_M
+	msr	sctlr_el1, x18
 	isb
 
 	/*
@@ -413,9 +347,33 @@ skip_pte:
 	b.ne	do_pte
 	b	next_pmd
 
+	/* Secondary CPUs end up here */
+__idmap_kpti_secondary:
+	/* Uninstall swapper before surgery begins */
+	__idmap_cpu_set_reserved_ttbr1 x18, x17
+
+	/* Increment the flag to let the boot CPU we're ready */
+1:	ldxr	w18, [flag_ptr]
+	add	w18, w18, #1
+	stxr	w17, w18, [flag_ptr]
+	cbnz	w17, 1b
+
+	/* Wait for the boot CPU to finish messing around with swapper */
+	sevl
+1:	wfe
+	ldxr	w18, [flag_ptr]
+	cbnz	w18, 1b
+
+	/* All done, act like nothing happened */
+	msr	ttbr1_el1, swapper_ttb
+	isb
+	ret
+
 	.unreq	cpu
 	.unreq	num_cpus
 	.unreq	swapper_pa
+	.unreq	swapper_ttb
+	.unreq	flag_ptr
 	.unreq	cur_pgdp
 	.unreq	end_pgdp
 	.unreq	pgd
@@ -428,31 +386,6 @@ skip_pte:
 	.unreq	cur_ptep
 	.unreq	end_ptep
 	.unreq	pte
-
-	/* Secondary CPUs end up here */
-__idmap_kpti_secondary:
-	/* Uninstall swapper before surgery begins */
-	__idmap_cpu_set_reserved_ttbr1 x16, x17
-
-	/* Increment the flag to let the boot CPU we're ready */
-1:	ldxr	w16, [flag_ptr]
-	add	w16, w16, #1
-	stxr	w17, w16, [flag_ptr]
-	cbnz	w17, 1b
-
-	/* Wait for the boot CPU to finish messing around with swapper */
-	sevl
-1:	wfe
-	ldxr	w16, [flag_ptr]
-	cbnz	w16, 1b
-
-	/* All done, act like nothing happened */
-	msr	ttbr1_el1, swapper_ttb
-	isb
-	ret
-
-	.unreq	swapper_ttb
-	.unreq	flag_ptr
 ENDPROC(idmap_kpti_install_ng_mappings)
 	.popsection
 #endif
@@ -503,8 +436,7 @@ ENTRY(__cpu_setup)
 	 * both user and kernel.
 	 */
 	ldr	x10, =TCR_TxSZ(VA_BITS) | TCR_CACHE_FLAGS | TCR_SMP_FLAGS | \
-			TCR_TG_FLAGS | TCR_ASID16 | TCR_TBI0 | TCR_A1 | \
-			TCR_KASAN_FLAGS
+			TCR_TG_FLAGS | TCR_ASID16 | TCR_TBI0 | TCR_A1
 	tcr_set_idmap_t0sz	x10, x9
 
 	/*
@@ -515,15 +447,21 @@ ENTRY(__cpu_setup)
 	bfi	x10, x9, #32, #3
 #ifdef CONFIG_ARM64_HW_AFDBM
 	/*
-	 * Enable hardware update of the Access Flags bit.
-	 * Hardware dirty bit management is enabled later,
-	 * via capabilities.
+	 * Hardware update of the Access and Dirty bits.
 	 */
 	mrs	x9, ID_AA64MMFR1_EL1
 	and	x9, x9, #0xf
-	cbz	x9, 1f
-	orr	x10, x10, #TCR_HA		// hardware Access flag update
-1:
+	cbz	x9, 2f
+	cmp	x9, #2
+	b.lt	1f
+#ifdef CONFIG_ARM64_ERRATUM_1024718
+	/* Disable hardware DBM on Cortex-A55 all versions */
+	cpu_midr_match MIDR_CORTEX_A55, MIDR_CPU_VAR_REV(0, 0), MIDR_CPU_VAR_REV(0xf, 0xf), x1, x2, x3, x4
+	cbnz	x1, 1f
+#endif
+	orr	x10, x10, #TCR_HD		// hardware Dirty flag update
+1:	orr	x10, x10, #TCR_HA		// hardware Access flag update
+2:
 #endif	/* CONFIG_ARM64_HW_AFDBM */
 	msr	tcr_el1, x10
 	ret					// return to head.S
