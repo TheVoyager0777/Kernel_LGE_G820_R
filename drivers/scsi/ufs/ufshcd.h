@@ -1573,5 +1573,4 @@ static inline void ufshcd_vops_remove_debugfs(struct ufs_hba *hba)
 {
 }
 #endif
-
 #endif /* End of Header */
