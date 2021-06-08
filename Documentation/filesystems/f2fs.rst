@@ -281,6 +281,18 @@ compress_extension=%s	 Support adding specified extension, so that f2fs can enab
 			 For other files, we can still enable compression via ioctl.
 			 Note that, there is one reserved special extension '*', it
 			 can be set to enable compression for all files.
+nocompress_extension=%s	   Support adding specified extension, so that f2fs can disable
+			 compression on those corresponding files, just contrary to compression extension.
+			 If you know exactly which files cannot be compressed, you can use this.
+			 The same extension name can't appear in both compress and nocompress
+			 extension at the same time.
+			 If the compress extension specifies all files, the types specified by the
+			 nocompress extension will be treated as special cases and will not be compressed.
+			 Don't allow use '*' to specifie all file in nocompress extension.
+			 After add nocompress_extension, the priority should be:
+			 dir_flag < comp_extention,nocompress_extension < comp_file_flag,no_comp_file_flag.
+			 See more in compression sections.
+
 compress_chksum		 Support verifying chksum of raw data in compressed cluster.
 compress_mode=%s	 Control file compression mode. This supports "fs" and "user"
 			 modes. In "fs" mode (default), f2fs does automatic compression
@@ -720,10 +732,10 @@ users.
 ===================== ======================== ===================
 User                  F2FS                     Block
 ===================== ======================== ===================
-                      META                     WRITE_LIFE_NOT_SET
-                      HOT_NODE                 "
-                      WARM_NODE                "
-                      COLD_NODE                "
+N/A                   META                     WRITE_LIFE_NOT_SET
+N/A                   HOT_NODE                 "
+N/A                   WARM_NODE                "
+N/A                   COLD_NODE                "
 ioctl(COLD)           COLD_DATA                WRITE_LIFE_EXTREME
 extension list        "                        "
 
@@ -749,10 +761,10 @@ WRITE_LIFE_LONG       "                        WRITE_LIFE_LONG
 ===================== ======================== ===================
 User                  F2FS                     Block
 ===================== ======================== ===================
-                      META                     WRITE_LIFE_MEDIUM;
-                      HOT_NODE                 WRITE_LIFE_NOT_SET
-                      WARM_NODE                "
-                      COLD_NODE                WRITE_LIFE_NONE
+N/A                   META                     WRITE_LIFE_MEDIUM;
+N/A                   HOT_NODE                 WRITE_LIFE_NOT_SET
+N/A                   WARM_NODE                "
+N/A                   COLD_NODE                WRITE_LIFE_NONE
 ioctl(COLD)           COLD_DATA                WRITE_LIFE_EXTREME
 extension list        "                        "
 
@@ -817,11 +829,36 @@ Compression implementation
   all logical blocks in cluster contain valid data and compress ratio of
   cluster data is lower than specified threshold.
 
-- To enable compression on regular inode, there are three ways:
+- To enable compression on regular inode, there are four ways:
 
   * chattr +c file
   * chattr +c dir; touch dir/file
   * mount w/ -o compress_extension=ext; touch file.ext
+  * mount w/ -o compress_extension=*; touch any_file
+
+- To disable compression on regular inode, there are two ways:
+
+  * chattr -c file
+  * mount w/ -o nocompress_extension=ext; touch file.ext
+
+- Priority in between FS_COMPR_FL, FS_NOCOMP_FS, extensions:
+
+  * compress_extension=so; nocompress_extension=zip; chattr +c dir; touch
+    dir/foo.so; touch dir/bar.zip; touch dir/baz.txt; then foo.so and baz.txt
+    should be compresse, bar.zip should be non-compressed. chattr +c dir/bar.zip
+    can enable compress on bar.zip.
+  * compress_extension=so; nocompress_extension=zip; chattr -c dir; touch
+    dir/foo.so; touch dir/bar.zip; touch dir/baz.txt; then foo.so should be
+    compresse, bar.zip and baz.txt should be non-compressed.
+    chattr+c dir/bar.zip; chattr+c dir/baz.txt; can enable compress on bar.zip
+    and baz.txt.
+
+- At this point, compression feature doesn't expose compressed space to user
+  directly in order to guarantee potential data updates later to the space.
+  Instead, the main goal is to reduce data writes to flash disk as much as
+  possible, resulting in extending disk life time as well as relaxing IO
+  congestion. Alternatively, we've added ioctl interface to reclaim compressed
+  space and show it to user after putting the immutable bit.
 
 Compress metadata layout::
 
@@ -855,7 +892,7 @@ This is the default option. f2fs does automatic compression in the writeback of 
 compression enabled files.
 
 2) compress_mode=user
-This disables the automaic compression and gives the user discretion of choosing the
+This disables the automatic compression and gives the user discretion of choosing the
 target file and the timing. The user can do manual compression/decompression on the
 compression enabled files using F2FS_IOC_DECOMPRESS_FILE and F2FS_IOC_COMPRESS_FILE
 ioctls like the below.
