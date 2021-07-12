@@ -2082,11 +2082,13 @@ static void uclamp_set(struct kernfs_open_file *of,
 	const char *cs_name = cs->css.cgroup->kn->name;
 
 	static struct ucl_param tgts[] = {
-		{"top-app",    	     	"10", "max", 1, 1},
-		{"foreground", 	     	"0",  "70",  0, 0},
+		{"top-app",    	     	"20", "max", 1, 1},
+		{"foreground", 	     	"0",  "70",  1, 0},
 		{"background", 	     	"20", "max", 0, 0},
 		{"system-background", 	"0",  "30",  0, 0},
 		{"camera-daemon",	"50", "max", 1, 1},
+		{"display",		"20", "max", 1, 1},
+		{"restricted",		"0",  "30",  0, 0},
 	};
 
 	for (i = 0; i < ARRAY_SIZE(tgts); i++) {
