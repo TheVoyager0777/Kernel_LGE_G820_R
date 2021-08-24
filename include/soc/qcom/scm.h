@@ -32,6 +32,7 @@
 #define SCM_SVC_RTIC			0x19
 #define SCM_SVC_TSENS			0x1E
 #define SCM_SVC_TZSCHEDULER		0xFC
+#define TZ_SVC_QUP_FW_LOAD		0x1F
 #define SCM_SVC_BW          0xFD
 
 #define SCM_FUSE_READ			0x7
@@ -124,7 +125,7 @@ struct scm_hdcp_req {
 };
 
 extern struct mutex scm_lmh_lock;
-
+extern bool under_scm_call(int cpu);
 #else
 
 static inline int scm_call2(u32 cmd_id, struct scm_desc *desc)
@@ -185,6 +186,10 @@ static inline bool scm_is_secure_device(void)
 static inline int scm_enable_mem_protection(void)
 {
 	return 0;
+}
+extern bool under_scm_call(int cpu)
+{
+	return false;
 }
 #endif
 
