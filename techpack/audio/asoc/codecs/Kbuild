@@ -218,6 +218,12 @@ endif
 #For TAS2562/TAS2558
 obj-$(CONFIG_SND_SOC_TAS2562)   += tas2562/
 
+obj-$(CONFIG_SND_SOC_TFA9872)   += tfa9872/
+
+obj-$(CONFIG_SND_SOC_SMA6101)   += sma6101/
+
+obj-$(CONFIG_SND_SOC_CS43131)   += cs43131/
+
 ifeq ($(CONFIG_SND_SOC_GCOV), y)
 GCOV_PROFILE := y
 endif
