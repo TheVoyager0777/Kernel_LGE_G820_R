@@ -34,9 +34,19 @@
 #include <linux/cpufreq.h>
 #include <linux/cpuidle.h>
 #include <linux/timer.h>
+#include <linux/wakeup_reason.h>
 
 #include "../base.h"
 #include "power.h"
+
+#if defined(CONFIG_MACH_LGE)
+#include <linux/module.h>
+#ifdef SUPPORT_DEBUGFS
+#include <linux/debugfs.h>
+#else
+#include <linux/proc_fs.h>
+#endif
+#endif
 
 typedef int (*pm_callback_t)(struct device *);
 
@@ -124,6 +134,10 @@ void device_pm_unlock(void)
  */
 void device_pm_add(struct device *dev)
 {
+	/* Skip PM setup/initialization. */
+	if (device_pm_not_required(dev))
+		return;
+
 	pr_debug("PM: Adding info for %s:%s\n",
 		 dev->bus ? dev->bus->name : "No Bus", dev_name(dev));
 	device_pm_check_callbacks(dev);
@@ -142,6 +156,9 @@ void device_pm_add(struct device *dev)
  */
 void device_pm_remove(struct device *dev)
 {
+	if (device_pm_not_required(dev))
+		return;
+
 	pr_debug("PM: Removing info for %s:%s\n",
 		 dev->bus ? dev->bus->name : "No Bus", dev_name(dev));
 	complete_all(&dev->power.completion);
@@ -446,9 +463,41 @@ static void pm_dev_err(struct device *dev, pm_message_t state, const char *info,
 		dev_name(dev), pm_verb(state.event), info, error);
 }
 
+#if defined(CONFIG_MACH_LGE)
+#define RESUME_TIME_SIZE 24
+char resume_time[] = "01-01 00:00:00.000 0000";
+long int dpm_resume_time = 0;
+static int create_debugfs = 0;
+
+#ifdef SUPPORT_DEBUGFS
+static struct dentry *debugfs_resume_time;
+#endif
+
+static int resume_time_show(struct seq_file *m, void *unused)
+{
+	seq_printf(m, "%s\n", resume_time);
+	return 0;
+}
+
+static int resume_time_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, resume_time_show, NULL);
+}
+
+static const struct file_operations resume_time_fops = {
+	.open		= resume_time_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+};
+#endif
+
 static void dpm_show_time(ktime_t starttime, pm_message_t state, int error,
 			  const char *info)
 {
+#if defined(CONFIG_MACH_LGE)
+	struct timespec time;
+	struct tm tmresult;
+#endif
 	ktime_t calltime;
 	u64 usecs64;
 	int usecs;
@@ -464,6 +513,44 @@ static void dpm_show_time(ktime_t starttime, pm_message_t state, int error,
 		  info ?: "", info ? " " : "", pm_verb(state.event),
 		  error ? "aborted" : "complete",
 		  usecs / USEC_PER_MSEC, usecs % USEC_PER_MSEC);
+
+#if defined(CONFIG_MACH_LGE)
+#ifdef SUPPORT_DEBUGFS
+	if (!create_debugfs) {
+		debugfs_resume_time = debugfs_create_file("resume_time",
+				S_IRUGO, NULL, NULL,
+				&resume_time_fops);
+		create_debugfs = 1;
+	}
+#else
+	if (!create_debugfs) {
+		proc_create("resume_time", S_IRUGO, NULL, &resume_time_fops);
+		create_debugfs = 1;
+	}
+#endif
+
+	if (state.event == PM_EVENT_RESUME) {
+		dpm_resume_time = dpm_resume_time + usecs / USEC_PER_MSEC;
+	}
+
+	if (info == NULL && state.event == PM_EVENT_RESUME) {
+		time = __current_kernel_time();
+		time_to_tm(time.tv_sec, sys_tz.tz_minuteswest * 60 * (-1),
+				&tmresult);
+		snprintf(resume_time,
+				RESUME_TIME_SIZE,
+				"%02d-%02d %02d:%02d:%02d.%03lu %ld\n",
+				tmresult.tm_mon+1,
+				tmresult.tm_mday,
+				tmresult.tm_hour,
+				tmresult.tm_min,
+				tmresult.tm_sec,
+				(unsigned long) time.tv_nsec/1000000,
+				dpm_resume_time);
+		printk(KERN_EMERG "resume_time:%s", resume_time);
+		dpm_resume_time = 0;
+	}
+#endif
 }
 
 static int dpm_run_callback(pm_callback_t cb, struct device *dev,
@@ -628,6 +715,10 @@ static void async_resume_noirq(void *data, async_cookie_t cookie)
 	put_device(dev);
 }
 
+#if defined(CONFIG_MACH_LGE)
+static int nsec64_resume_spend = 10000; /* over 10ms */
+#endif
+
 void dpm_noirq_resume_devices(pm_message_t state)
 {
 	struct device *dev;
@@ -651,6 +742,10 @@ void dpm_noirq_resume_devices(pm_message_t state)
 	}
 
 	while (!list_empty(&dpm_noirq_list)) {
+#if defined(CONFIG_MACH_LGE)
+		ktime_t stime, etime;
+#endif
+
 		dev = to_device(dpm_noirq_list.next);
 		get_device(dev);
 		list_move_tail(&dev->power.entry, &dpm_late_early_list);
@@ -659,6 +754,10 @@ void dpm_noirq_resume_devices(pm_message_t state)
 		if (!is_async(dev)) {
 			int error;
 
+#if defined(CONFIG_MACH_LGE)
+			if (nsec64_resume_spend)
+				stime = ktime_get();
+#endif
 			error = device_resume_noirq(dev, state, false);
 			if (error) {
 				suspend_stats.failed_resume_noirq++;
@@ -666,6 +765,24 @@ void dpm_noirq_resume_devices(pm_message_t state)
 				dpm_save_failed_dev(dev_name(dev));
 				pm_dev_err(dev, state, " noirq", error);
 			}
+
+#if defined(CONFIG_MACH_LGE)
+			if (nsec64_resume_spend) {
+				int usecs;
+				u64 usecs64;
+				etime = ktime_get();
+				usecs64 = ktime_to_ns(ktime_sub(etime, stime));
+				do_div(usecs64, NSEC_PER_USEC);
+				usecs = usecs64;
+				if (usecs64 > (u64)nsec64_resume_spend-1) {
+					printk(KERN_EMERG
+						"dpm_resume_noirq: %s (%s) %d\n",
+						dev_name(dev),
+						dev_driver_string(dev),
+						usecs);
+				}
+			}
+#endif
 		}
 
 		mutex_lock(&dpm_list_mtx);
@@ -792,6 +909,9 @@ void dpm_resume_early(pm_message_t state)
 	}
 
 	while (!list_empty(&dpm_late_early_list)) {
+#if defined(CONFIG_MACH_LGE)
+		ktime_t stime, etime;
+#endif
 		dev = to_device(dpm_late_early_list.next);
 		get_device(dev);
 		list_move_tail(&dev->power.entry, &dpm_suspended_list);
@@ -799,6 +919,10 @@ void dpm_resume_early(pm_message_t state)
 
 		if (!is_async(dev)) {
 			int error;
+#if defined(CONFIG_MACH_LGE)
+			if (nsec64_resume_spend)
+				stime = ktime_get();
+#endif
 
 			error = device_resume_early(dev, state, false);
 			if (error) {
@@ -807,6 +931,23 @@ void dpm_resume_early(pm_message_t state)
 				dpm_save_failed_dev(dev_name(dev));
 				pm_dev_err(dev, state, " early", error);
 			}
+#if defined(CONFIG_MACH_LGE)
+			if (nsec64_resume_spend) {
+				int usecs;
+				u64 usecs64;
+				etime = ktime_get();
+				usecs64 = ktime_to_ns(ktime_sub(etime, stime));
+				do_div(usecs64, NSEC_PER_USEC);
+				usecs = usecs64;
+				if (usecs64 > (u64)nsec64_resume_spend-1) {
+					printk(KERN_EMERG
+						"dpm_resume_early: %s (%s) %d\n",
+						dev_name(dev),
+						dev_driver_string(dev),
+						usecs);
+				}
+			}
+#endif
 		}
 		mutex_lock(&dpm_list_mtx);
 		put_device(dev);
@@ -930,9 +1071,34 @@ static void async_resume(void *data, async_cookie_t cookie)
 	struct device *dev = (struct device *)data;
 	int error;
 
+#if defined(CONFIG_MACH_LGE)
+	ktime_t stime, etime;
+	if (nsec64_resume_spend)
+		stime = ktime_get();
+#endif
+
 	error = device_resume(dev, pm_transition, true);
 	if (error)
 		pm_dev_err(dev, pm_transition, " async", error);
+
+#if defined(CONFIG_MACH_LGE)
+	if (nsec64_resume_spend) {
+		int usecs;
+		u64 usecs64;
+		etime = ktime_get();
+		usecs64 = ktime_to_ns(ktime_sub(etime, stime));
+		do_div(usecs64, NSEC_PER_USEC);
+		usecs = usecs64;
+		if (usecs64 > (u64)nsec64_resume_spend-1) {
+			printk(KERN_EMERG
+				"async_resume: %s (%s) %d\n",
+				dev_name(dev),
+				dev_driver_string(dev),
+				usecs);
+		}
+	}
+#endif
+
 	put_device(dev);
 }
 
@@ -968,8 +1134,15 @@ void dpm_resume(pm_message_t state)
 		get_device(dev);
 		if (!is_async(dev)) {
 			int error;
-
+#if defined(CONFIG_MACH_LGE)
+			ktime_t stime, etime;
+#endif
 			mutex_unlock(&dpm_list_mtx);
+
+#if defined(CONFIG_MACH_LGE)
+			if (nsec64_resume_spend)
+				stime = ktime_get();
+#endif
 
 			error = device_resume(dev, state, false);
 			if (error) {
@@ -978,6 +1151,23 @@ void dpm_resume(pm_message_t state)
 				dpm_save_failed_dev(dev_name(dev));
 				pm_dev_err(dev, state, "", error);
 			}
+#if defined(CONFIG_MACH_LGE)
+			if (nsec64_resume_spend) {
+				int usecs;
+				u64 usecs64;
+				etime = ktime_get();
+				usecs64 = ktime_to_ns(ktime_sub(etime, stime));
+				do_div(usecs64, NSEC_PER_USEC);
+				usecs = usecs64;
+				if (usecs64 > (u64)nsec64_resume_spend-1) {
+					printk(KERN_EMERG
+						"dpm_resume: %s (%s) %d\n",
+						dev_name(dev),
+						dev_driver_string(dev),
+						usecs);
+				}
+			}
+#endif
 
 			mutex_lock(&dpm_list_mtx);
 		}
@@ -1165,10 +1355,13 @@ static int __device_suspend_noirq(struct device *dev, pm_message_t state, bool a
 	}
 
 	error = dpm_run_callback(callback, dev, state, info);
-	if (!error)
+	if (!error) {
 		dev->power.is_noirq_suspended = true;
-	else
+	} else {
 		async_error = error;
+		log_suspend_abort_reason("Callback failed on %s in %pS returned %d",
+					 dev_name(dev), callback, error);
+	}
 
 Complete:
 	complete_all(&dev->power.completion);
@@ -1326,10 +1519,13 @@ static int __device_suspend_late(struct device *dev, pm_message_t state, bool as
 	}
 
 	error = dpm_run_callback(callback, dev, state, info);
-	if (!error)
+	if (!error) {
 		dev->power.is_late_suspended = true;
-	else
+	} else {
 		async_error = error;
+		log_suspend_abort_reason("Callback failed on %s in %pS returned %d",
+					 dev_name(dev), callback, error);
+	}
 
 Complete:
 	TRACE_SUSPEND(error);
@@ -1587,7 +1783,6 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 		dev->power.is_suspended = true;
 		if (parent) {
 			spin_lock_irq(&parent->power.lock);
-
 			dev->parent->power.direct_complete = false;
 			if (dev->power.wakeup_path
 			    && !dev->parent->power.ignore_children)
@@ -1596,6 +1791,9 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 			spin_unlock_irq(&parent->power.lock);
 		}
 		dpm_clear_suppliers_direct_complete(dev);
+	} else {
+		log_suspend_abort_reason("Callback failed on %s in %pS returned %d",
+					 dev_name(dev), callback, error);
 	}
 
 	device_unlock(dev);
@@ -1805,6 +2003,9 @@ int dpm_prepare(pm_message_t state)
 			printk(KERN_INFO "PM: Device %s not prepared "
 				"for power transition: code %d\n",
 				dev_name(dev), error);
+			log_suspend_abort_reason("Device %s not prepared for power transition: code %d",
+						 dev_name(dev), error);
+			dpm_save_failed_dev(dev_name(dev));
 			put_device(dev);
 			break;
 		}

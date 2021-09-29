@@ -672,7 +672,8 @@ void device_add_disk(struct device *parent, struct gendisk *disk)
 
 	/* Register BDI before referencing it from bdev */
 	bdi = disk->queue->backing_dev_info;
-	bdi_register_owner(bdi, disk_to_dev(disk));
+	retval = bdi_register_owner(bdi, disk_to_dev(disk));
+	WARN_ON(retval);
 
 	blk_register_region(disk_devt(disk), disk->minors, NULL,
 			    exact_match, exact_lock, disk);
@@ -685,9 +686,11 @@ void device_add_disk(struct device *parent, struct gendisk *disk)
 	 */
 	WARN_ON_ONCE(!blk_get_queue(disk->queue));
 
-	retval = sysfs_create_link(&disk_to_dev(disk)->kobj, &bdi->dev->kobj,
-				   "bdi");
-	WARN_ON(retval);
+	if (!retval) {
+		retval = sysfs_create_link(&disk_to_dev(disk)->kobj,
+				&bdi->dev->kobj, "bdi");
+		WARN_ON(retval);
+	}
 
 	disk_add_events(disk);
 	blk_integrity_add(disk);
@@ -1749,6 +1752,11 @@ static void disk_check_events(struct disk_events *ev,
 	unsigned long intv;
 	int nr_events = 0, i;
 
+#ifdef CONFIG_USB_HOST_NOTIFY
+	events = 0;
+
+	if (disk->interfaces != GENHD_IF_USB)
+#endif
 	/* check events */
 	events = disk->fops->check_events(disk, clearing);
 
@@ -1775,6 +1783,9 @@ static void disk_check_events(struct disk_events *ev,
 		if (events & disk->events & (1 << i))
 			envp[nr_events++] = disk_uevents[i];
 
+#ifdef CONFIG_USB_HOST_NOTIFY
+	if (disk->interfaces != GENHD_IF_USB)
+#endif
 	if (nr_events)
 		kobject_uevent_env(&disk_to_dev(disk)->kobj, KOBJ_CHANGE, envp);
 }

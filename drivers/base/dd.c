@@ -27,9 +27,15 @@
 #include <linux/async.h>
 #include <linux/pm_runtime.h>
 #include <linux/pinctrl/devinfo.h>
+#include <linux/platform_device.h>
 
 #include "base.h"
 #include "power/power.h"
+
+#if defined(CONFIG_MACH_LGE)
+#include <linux/timer.h>
+#include <linux/proc_fs.h>
+#endif
 
 /*
  * Deferred Probe infrastructure.
@@ -55,6 +61,10 @@ static LIST_HEAD(deferred_probe_pending_list);
 static LIST_HEAD(deferred_probe_active_list);
 static atomic_t deferred_trigger_count = ATOMIC_INIT(0);
 static bool initcalls_done;
+
+/* Save the async probe drivers' name from kernel cmdline */
+#define ASYNC_DRV_NAMES_MAX_LEN	256
+static char async_probe_drv_names[ASYNC_DRV_NAMES_MAX_LEN];
 
 /*
  * In some cases, like suspend to RAM or hibernation, It might be reasonable
@@ -227,23 +237,44 @@ void device_unblock_probing(void)
 	driver_deferred_probe_trigger();
 }
 
+static void enable_trigger_defer_cycle(void)
+{
+	driver_deferred_probe_enable = true;
+	driver_deferred_probe_trigger();
+	/*
+	 * Sort as many dependencies as possible before the next initcall
+	 * level
+	 */
+	flush_work(&deferred_probe_work);
+}
+
 /**
  * deferred_probe_initcall() - Enable probing of deferred devices
  *
  * We don't want to get in the way when the bulk of drivers are getting probed.
  * Instead, this initcall makes sure that deferred probing is delayed until
- * late_initcall time.
+ * all the registered initcall functions at a particular level are completed.
+ * This function is invoked at every *_initcall_sync level.
  */
 static int deferred_probe_initcall(void)
 {
-	driver_deferred_probe_enable = true;
-	driver_deferred_probe_trigger();
-	/* Sort as many dependencies as possible before exiting initcalls */
-	flush_work(&deferred_probe_work);
+	enable_trigger_defer_cycle();
+	driver_deferred_probe_enable = false;
+	return 0;
+}
+arch_initcall_sync(deferred_probe_initcall);
+subsys_initcall_sync(deferred_probe_initcall);
+fs_initcall_sync(deferred_probe_initcall);
+device_initcall_sync(deferred_probe_initcall);
+
+static int deferred_probe_enable_fn(void)
+{
+	/* Enable deferred probing for all time */
+	enable_trigger_defer_cycle();
 	initcalls_done = true;
 	return 0;
 }
-late_initcall(deferred_probe_initcall);
+late_initcall(deferred_probe_enable_fn);
 
 /**
  * device_is_bound() - Check if device is bound to a driver
@@ -350,12 +381,60 @@ EXPORT_SYMBOL_GPL(device_bind_driver);
 static atomic_t probe_count = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(probe_waitqueue);
 
+#if defined(CONFIG_MACH_LGE)
+static int nsec64_probe_spend = 30000; /* over 30ms */
+static int pos = 0;
+static int create_debugfs = 0;
+char probe_time[1024] = "";
+
+#ifdef SUPPORT_DEBUGFS
+static struct dentry *debugfs_probe_time;
+#endif
+
+static int probe_time_show(struct seq_file *m, void *unused)
+{
+	seq_printf(m, "%s\n", probe_time);
+	return 0;
+}
+
+static int probe_time_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, probe_time_show, NULL);
+}
+
+static const struct file_operations probe_time_fops = {
+	.open		= probe_time_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+};
+#endif
+
 static int really_probe(struct device *dev, struct device_driver *drv)
 {
 	int ret = -EPROBE_DEFER;
 	int local_trigger_count = atomic_read(&deferred_trigger_count);
 	bool test_remove = IS_ENABLED(CONFIG_DEBUG_TEST_DRIVER_REMOVE) &&
 			   !drv->suppress_bind_attrs;
+
+#if defined(CONFIG_MACH_LGE)
+	ktime_t bus_stime, bus_etime, drv_stime, drv_etime;
+
+#ifdef SUPPORT_DEBUGFS
+	if (!create_debugfs) {
+		debugfs_probe_time = debugfs_create_file("probe_time",
+							S_IRUGO, NULL, NULL,
+							&probe_time_fops);
+		create_debugfs = 1;
+	}
+#else
+	if (!create_debugfs) {
+		proc_create("probe_time", S_IRUGO, NULL, &probe_time_fops);
+		create_debugfs = 1;
+	}
+#endif
+	if (pos > sizeof(probe_time) - 100)
+		pos = 0;
+#endif
 
 	if (defer_all_probes) {
 		/*
@@ -405,11 +484,81 @@ re_probe:
 	}
 
 	if (dev->bus->probe) {
+#if defined(CONFIG_MACH_LGE)
+		if (nsec64_probe_spend)
+			bus_stime = ktime_get();
+#endif
+#if defined(CONFIG_LGE_PROBE_TIME_PROFILING) || defined(CONFIG_PROC_EVENTS)
+		dev_err(dev, "bus probe_log s\n");
+#endif
 		ret = dev->bus->probe(dev);
+#if defined(CONFIG_LGE_PROBE_TIME_PROFILING) || defined(CONFIG_PROC_EVENTS)
+		dev_err(dev, "bus probe_log e\n");
+#endif
+
+#if defined(CONFIG_MACH_LGE)
+		if (nsec64_probe_spend) {
+			int usecs, bus_us;
+			u64 usecs64, bus_us64;
+			bus_etime = ktime_get();
+			bus_us64 = ktime_to_ns(bus_stime);
+			do_div(bus_us64, NSEC_PER_USEC);
+			bus_us = bus_us64;
+			usecs64 = ktime_to_ns(ktime_sub(bus_etime, bus_stime));
+			do_div(usecs64, NSEC_PER_USEC);
+			usecs = usecs64;
+			if (usecs64 > (u64)nsec64_probe_spend-1) {
+				pos += sprintf(&probe_time[pos], "%d %s %d\n",
+					bus_us/1000,
+					dev_driver_string(dev),
+					usecs/1000);
+				printk(KERN_EMERG
+					"bus probe : %d %s %d\n",
+					bus_us/1000,
+					dev_driver_string(dev),
+					usecs/1000);
+			}
+		}
+#endif
 		if (ret)
 			goto probe_failed;
 	} else if (drv->probe) {
+#if defined(CONFIG_MACH_LGE)
+		if (nsec64_probe_spend)
+			drv_stime = ktime_get();
+#endif
+#if defined(CONFIG_LGE_PROBE_TIME_PROFILING) || defined(CONFIG_PROC_EVENTS)
+		dev_err(dev, "drv probe_log s\n");
+#endif
 		ret = drv->probe(dev);
+#if defined(CONFIG_LGE_PROBE_TIME_PROFILING) || defined(CONFIG_PROC_EVENTS)
+		dev_err(dev, "drv probe_log e\n");
+#endif
+
+#if defined(CONFIG_MACH_LGE)
+		if (nsec64_probe_spend) {
+			int usecs, drv_us;
+			u64 usecs64, drv_us64;
+			drv_etime = ktime_get();
+			drv_us64 = ktime_to_ns(drv_stime);
+			do_div(drv_us64, NSEC_PER_USEC);
+			drv_us = drv_us64;
+			usecs64 = ktime_to_ns(ktime_sub(drv_etime, drv_stime));
+			do_div(usecs64, NSEC_PER_USEC);
+			usecs = usecs64;
+			if (usecs64 > (u64)nsec64_probe_spend-1) {
+				pos += sprintf(&probe_time[pos], "%d %s %d\n",
+					drv_us/1000,
+					dev_driver_string(dev),
+					usecs/1000);
+				printk(KERN_EMERG
+					"drv probe : %d %s %d\n",
+					drv_us/1000,
+					dev_driver_string(dev),
+					usecs/1000);
+			}
+		}
+#endif
 		if (ret)
 			goto probe_failed;
 	}
@@ -558,6 +707,23 @@ int driver_probe_device(struct device_driver *drv, struct device *dev)
 	return ret;
 }
 
+static inline bool cmdline_requested_async_probing(const char *drv_name)
+{
+	return parse_option_str(async_probe_drv_names, drv_name);
+}
+
+/* The option format is "driver_async_probe=drv_name1,drv_name2,..." */
+static int __init save_async_options(char *buf)
+{
+	if (strlen(buf) >= ASYNC_DRV_NAMES_MAX_LEN)
+		printk(KERN_WARNING
+			"Too long list of driver names for 'driver_async_probe'!\n");
+
+	strlcpy(async_probe_drv_names, buf, ASYNC_DRV_NAMES_MAX_LEN);
+	return 0;
+}
+__setup("driver_async_probe=", save_async_options);
+
 bool driver_allows_async_probing(struct device_driver *drv)
 {
 	switch (drv->probe_type) {
@@ -568,6 +734,9 @@ bool driver_allows_async_probing(struct device_driver *drv)
 		return false;
 
 	default:
+		if (cmdline_requested_async_probing(drv->name))
+			return true;
+
 		if (module_requested_async_probing(drv->owner))
 			return true;
 
@@ -751,6 +920,21 @@ void device_initial_probe(struct device *dev)
 	__device_attach(dev, true);
 }
 
+#ifdef CONFIG_PLATFORM_AUTO
+static inline int lock_parent(struct device *dev)
+{
+	if (!dev->parent || dev->bus == &platform_bus_type)
+		return 0;
+
+	return 1;
+}
+#else
+static inline int lock_parent(struct device *dev)
+{
+	return dev->parent ? 1 : 0;
+}
+#endif
+
 static int __driver_attach(struct device *dev, void *data)
 {
 	struct device_driver *drv = data;
@@ -778,13 +962,13 @@ static int __driver_attach(struct device *dev, void *data)
 		return ret;
 	} /* ret > 0 means positive match */
 
-	if (dev->parent)	/* Needed for USB */
+	if (lock_parent(dev))	/* Needed for USB */
 		device_lock(dev->parent);
 	device_lock(dev);
 	if (!dev->driver)
 		driver_probe_device(drv, dev);
 	device_unlock(dev);
-	if (dev->parent)
+	if (lock_parent(dev))
 		device_unlock(dev->parent);
 
 	return 0;

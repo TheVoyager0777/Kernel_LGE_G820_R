@@ -31,7 +31,7 @@ static struct kmem_cache *fuse_inode_cachep;
 struct list_head fuse_conn_list;
 DEFINE_MUTEX(fuse_mutex);
 
-static int set_global_limit(const char *val, struct kernel_param *kp);
+static int set_global_limit(const char *val, const struct kernel_param *kp);
 
 unsigned max_user_bgreq;
 module_param_call(max_user_bgreq, set_global_limit, param_get_uint,
@@ -826,7 +826,7 @@ static void sanitize_global_limit(unsigned *limit)
 		*limit = (1 << 16) - 1;
 }
 
-static int set_global_limit(const char *val, struct kernel_param *kp)
+static int set_global_limit(const char *val, const struct kernel_param *kp)
 {
 	int rv;
 
@@ -1009,6 +1009,14 @@ static int fuse_bdi_init(struct fuse_conn *fc, struct super_block *sb)
 	 *    /sys/class/bdi/<bdi>/max_ratio
 	 */
 	bdi_set_max_ratio(sb->s_bdi, 1);
+#ifdef CONFIG_LGE_BDI_STRICTLIMIT_DIRTY
+	/* fuse max_ratio will be set to 40 at vold by Android. */
+
+	/* sometimes, fuse wb_thresh is calculated to 0, suddenly. */
+	/* then, io_schedule_timeout is called although dirty is very few. */
+	/* if min_ratio value set greater than 0, it prevent unnecessary io_schedule_timeout  */
+	bdi_set_min_ratio(sb->s_bdi, 1);
+#endif
 
 	return 0;
 }

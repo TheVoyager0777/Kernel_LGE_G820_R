@@ -91,6 +91,15 @@ config USB_PCI
 
 	  When say N here it will not build PCI related code in USB driver.
 
+config USB_HOST_NOTIFY
+	boolean "USB notify layer"
+	depends on USB
+	default y
+	---help---
+	  Added usb notify layer on gadget,host,otg drivers.
+	  The usb notify layer controls otg mode and vbus draw
+	  and vbus detect irq.
+
 if USB
 
 source "drivers/usb/core/Kconfig"
@@ -172,6 +181,8 @@ source "drivers/usb/gadget/Kconfig"
 
 source "drivers/usb/typec/Kconfig"
 
+source "drivers/usb/pd/Kconfig"
+
 config USB_LED_TRIG
 	bool "USB LED Triggers"
 	depends on LEDS_CLASS && LEDS_TRIGGERS
@@ -205,3 +216,5 @@ config USB_ULPI_BUS
 	  be called ulpi.
 
 endif # USB_SUPPORT
+
+source "drivers/usb/Kconfig.lge"

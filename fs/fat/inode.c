@@ -625,10 +625,8 @@ static void fat_free_eofblocks(struct inode *inode)
 		 */
 		err = __fat_write_inode(inode, inode_needs_sync(inode));
 		if (err) {
-			fat_msg(inode->i_sb, KERN_WARNING, "Failed to "
-					"update on disk inode for unused "
-					"fallocated blocks, inode could be "
-					"corrupted. Please run fsck");
+			fat_msg_ratelimit(inode->i_sb, KERN_WARNING,
+				"Failed to update on disk inode for unused fallocated blocks, inode could be corrupted. Please run fsck");
 		}
 
 	}
@@ -672,7 +670,7 @@ static void fat_set_state(struct super_block *sb,
 
 	bh = sb_bread(sb, 0);
 	if (bh == NULL) {
-		fat_msg(sb, KERN_ERR, "unable to read boot sector "
+		fat_msg_ratelimit(sb, KERN_ERR, "unable to read boot sector "
 			"to mark fs as dirty");
 		return;
 	}
@@ -858,7 +856,7 @@ retry:
 	fat_get_blknr_offset(sbi, i_pos, &blocknr, &offset);
 	bh = sb_bread(sb, blocknr);
 	if (!bh) {
-		fat_msg(sb, KERN_ERR, "unable to read inode block "
+		fat_msg_ratelimit(sb, KERN_ERR, "unable to read inode block "
 		       "for updating (i_pos %lld)", i_pos);
 		return -EIO;
 	}
@@ -1606,6 +1604,10 @@ int fat_fill_super(struct super_block *sb, void *data, int silent, int isvfat,
 	int debug;
 	long error;
 	char buf[50];
+#ifdef CONFIG_MACH_LGE
+	u32 device_total_clusters = 0;
+	int need_update_badcluster = 0;
+#endif
 
 	/*
 	 * GFP_KERNEL is ok here, because while we do hold the
@@ -1860,6 +1862,29 @@ int fat_fill_super(struct super_block *sb, void *data, int silent, int isvfat,
 	}
 
 	fat_set_state(sb, 1, 0);
+#ifdef CONFIG_MACH_LGE
+	if (!(sb->s_flags & MS_RDONLY)) {
+		fat_msg(sb, KERN_WARNING, "filesystem total sector %u , device total sectors(%lld blocks)",
+					logical_sector_size * bpb.fat_total_sect >> sb->s_blocksize_bits,
+					sb->s_bdev->bd_inode->i_size >> sb->s_blocksize_bits);
+
+		device_total_clusters = ((sb->s_bdev->bd_inode->i_size/logical_sector_size) - sbi->data_start)/sbi->sec_per_clus;
+		fat_msg(sb, KERN_WARNING, "file system total clusters : %u "
+						", device total clusters (%u)", total_clusters, device_total_clusters);
+
+		/* Bad formatted file system */
+		if(logical_sector_size * bpb.fat_total_sect > sb->s_bdev->bd_inode->i_size) {
+				fat_msg(sb, KERN_WARNING, "bad geometry: block count %u "
+						"exceeds size of device (%lld blocks)",
+						logical_sector_size * bpb.fat_total_sect >> sb->s_blocksize_bits,
+						sb->s_bdev->bd_inode->i_size >> sb->s_blocksize_bits);
+				need_update_badcluster = device_total_clusters + FAT_START_ENT;
+		}
+
+		if(need_update_badcluster)
+			fat_ent_update_badclusters_after(sb,need_update_badcluster);
+	}
+#endif
 	return 0;
 
 out_invalid:

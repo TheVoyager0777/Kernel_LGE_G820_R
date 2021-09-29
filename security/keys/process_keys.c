@@ -414,7 +414,13 @@ key_ref_t search_my_process_keyrings(struct keyring_search_context *ctx)
 		}
 	}
 	/* or search the user-session keyring */
-	else if (ctx->cred->user->session_keyring) {
+
+	/*
+	 * LGE Modified : encryption-vpn@lge.com
+	 * ecryptfs cannot find user session_keyring
+	 * if there is session_keyring too.
+	 */
+	if (ctx->cred->user->session_keyring) {
 		key_ref = keyring_search_aux(
 			make_key_ref(ctx->cred->user->session_keyring, 1),
 			ctx);
@@ -756,6 +762,7 @@ reget_creds:
 	put_cred(ctx.cred);
 	goto try_again;
 }
+EXPORT_SYMBOL(lookup_user_key);
 
 /*
  * Join the named keyring as the session keyring if possible else attempt to

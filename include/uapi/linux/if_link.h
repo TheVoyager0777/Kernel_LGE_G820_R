@@ -451,6 +451,16 @@ enum {
 
 #define IFLA_MACSEC_MAX (__IFLA_MACSEC_MAX - 1)
 
+/* XFRM section */
+enum {
+	IFLA_XFRM_UNSPEC,
+	IFLA_XFRM_LINK,
+	IFLA_XFRM_IF_ID,
+	__IFLA_XFRM_MAX
+};
+
+#define IFLA_XFRM_MAX (__IFLA_XFRM_MAX - 1)
+
 enum macsec_validation_type {
 	MACSEC_VALIDATE_DISABLED = 0,
 	MACSEC_VALIDATE_CHECK = 1,
@@ -926,6 +936,30 @@ enum {
 	IFLA_EVENT_NOTIFY_PEERS,	/* re-sent grat. arp/ndisc */
 	IFLA_EVENT_IGMP_RESEND,		/* re-sent IGMP JOIN */
 	IFLA_EVENT_BONDING_OPTIONS,	/* change in bonding options */
+};
+
+/* rmnet section */
+
+#define RMNET_FLAGS_INGRESS_DEAGGREGATION         (1U << 0)
+#define RMNET_FLAGS_INGRESS_MAP_COMMANDS          (1U << 1)
+#define RMNET_FLAGS_INGRESS_MAP_CKSUMV4           (1U << 2)
+#define RMNET_FLAGS_EGRESS_MAP_CKSUMV4            (1U << 3)
+#define RMNET_FLAGS_INGRESS_COALESCE              (1U << 4)
+#define RMNET_FLAGS_INGRESS_MAP_CKSUMV5           (1U << 5)
+#define RMNET_FLAGS_EGRESS_MAP_CKSUMV5            (1U << 6)
+
+enum {
+	IFLA_RMNET_UNSPEC,
+	IFLA_RMNET_MUX_ID,
+	IFLA_RMNET_FLAGS,
+	__IFLA_RMNET_MAX,
+};
+
+#define IFLA_RMNET_MAX (__IFLA_RMNET_MAX - 1)
+
+struct ifla_rmnet_flags {
+	__u32   flags;
+	__u32   mask;
 };
 
 #endif /* _UAPI_LINUX_IF_LINK_H */

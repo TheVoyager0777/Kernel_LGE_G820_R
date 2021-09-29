@@ -34,6 +34,10 @@
 
 #include "extcon.h"
 
+#ifdef CONFIG_LGE_PM_PRM
+#include "../soc/qcom/lge/power/main/lge_prm.h"
+#endif
+
 #define SUPPORTED_CABLE_MAX	32
 
 struct __extcon_info {
@@ -175,6 +179,18 @@ struct __extcon_info {
 		.id = EXTCON_DISP_HMD,
 		.name = "HMD",
 	},
+#if defined(CONFIG_LGE_COVER_DISPLAY) || defined(CONFIG_LGE_DUAL_SCREEN)
+	[EXTCON_DISP_DD] = {
+		.type = EXTCON_TYPE_DISP | EXTCON_TYPE_USB,
+		.id = EXTCON_DISP_DD,
+		.name = "DualDisplay",
+	},
+	[EXTCON_DISP_DS2] = {
+		.type = EXTCON_TYPE_DISP | EXTCON_TYPE_USB,
+		.id = EXTCON_DISP_DS2,
+		.name = "DS2",
+	},
+#endif
 
 	/* Miscellaneous external connector */
 	[EXTCON_DOCK] = {
@@ -487,6 +503,21 @@ int extcon_sync(struct extcon_dev *edev, unsigned int id)
 }
 EXPORT_SYMBOL_GPL(extcon_sync);
 
+int extcon_blocking_sync(struct extcon_dev *edev, unsigned int id, u8 val)
+{
+	int index;
+
+	if (!edev)
+		return -EINVAL;
+
+	index = find_cable_index_by_id(edev, id);
+	if (index < 0)
+		return index;
+
+	return blocking_notifier_call_chain(&edev->bnh[index], val, edev);
+}
+EXPORT_SYMBOL(extcon_blocking_sync);
+
 /**
  * extcon_get_state() - Get the state of an external connector.
  * @edev:	the extcon device
@@ -565,6 +596,18 @@ int extcon_set_state(struct extcon_dev *edev, unsigned int id, bool state)
 		edev->state &= ~(BIT(index));
 out:
 	spin_unlock_irqrestore(&edev->lock, flags);
+
+#ifdef CONFIG_LGE_PM_PRM
+#if defined(CONFIG_LGE_COVER_DISPLAY) || defined(CONFIG_LGE_DUAL_SCREEN)
+	if (id == EXTCON_DISP_DS1) {
+		pr_err("prm_log: DualDisplay updated, id:%u, state:%d\n", id, edev->state);
+		lge_prm_display_set_event(LGE_PRM_DISPLAY_EVENT_DD_STATE, edev->state);
+	} else if (id == EXTCON_DISP_DS2) {
+		pr_err("prm_log: DualDisplay2 updated, id:%u, state:%d\n", id, state);
+		lge_prm_display_set_event(LGE_PRM_DISPLAY_EVENT_DD2_STATE, state);
+	}
+#endif
+#endif
 
 	return ret;
 }
@@ -866,6 +909,17 @@ int extcon_set_property_capability(struct extcon_dev *edev, unsigned int id,
 }
 EXPORT_SYMBOL_GPL(extcon_set_property_capability);
 
+int extcon_set_mutually_exclusive(struct extcon_dev *edev,
+				const u32 *exclusive)
+{
+	if (!edev)
+		return -EINVAL;
+
+	edev->mutually_exclusive = exclusive;
+	return 0;
+}
+EXPORT_SYMBOL(extcon_set_mutually_exclusive);
+
 /**
  * extcon_get_extcon_dev() - Get the extcon device instance from the name.
  * @extcon_name:	the extcon name provided with extcon_dev_register()
@@ -924,6 +978,38 @@ int extcon_register_notifier(struct extcon_dev *edev, unsigned int id,
 	return ret;
 }
 EXPORT_SYMBOL_GPL(extcon_register_notifier);
+
+int extcon_register_blocking_notifier(struct extcon_dev *edev, unsigned int id,
+			struct notifier_block *nb)
+{
+	int idx = -EINVAL;
+
+	if (!edev || !nb)
+		return -EINVAL;
+
+	idx = find_cable_index_by_id(edev, id);
+	if (idx < 0)
+		return idx;
+
+	return blocking_notifier_chain_register(&edev->bnh[idx], nb);
+}
+EXPORT_SYMBOL(extcon_register_blocking_notifier);
+
+int extcon_unregister_blocking_notifier(struct extcon_dev *edev,
+			unsigned int id, struct notifier_block *nb)
+{
+	int idx;
+
+	if (!edev || !nb)
+		return -EINVAL;
+
+	idx = find_cable_index_by_id(edev, id);
+	if (idx < 0)
+		return idx;
+
+	return blocking_notifier_chain_unregister(&edev->bnh[idx], nb);
+}
+EXPORT_SYMBOL(extcon_unregister_blocking_notifier);
 
 /**
  * extcon_unregister_notifier() - Unregister a notifier block from the extcon.
@@ -1113,14 +1199,33 @@ int extcon_dev_register(struct extcon_dev *edev)
 	edev->dev.class = extcon_class;
 	edev->dev.release = extcon_dev_release;
 
+#ifdef CONFIG_MACH_LGE
+	if (edev->name != NULL &&
+		(!strcmp(edev->name, "h2w") || !strcmp(edev->name, "sar_backoff") || !strcmp(edev->name, "ram_status") || !strcmp(edev->name, "voc_mute_status"))
+	   )
+		dev_err(&edev->dev, "skip assign edev->dev.parent\n");
+	else
+		edev->name = dev_name(edev->dev.parent);
+#else
 	edev->name = dev_name(edev->dev.parent);
+#endif
 	if (IS_ERR_OR_NULL(edev->name)) {
 		dev_err(&edev->dev,
 			"extcon device name is null\n");
 		return -EINVAL;
 	}
+
+#ifdef CONFIG_MACH_LGE
+	if(edev->name != NULL && (!strcmp(edev->name, "h2w"))) {
+		dev_set_name(&edev->dev, "extcon%lu", 100);
+	} else {
+		dev_set_name(&edev->dev, "extcon%lu",
+				(unsigned long)atomic_inc_return(&edev_no));
+	}
+#else
 	dev_set_name(&edev->dev, "extcon%lu",
 			(unsigned long)atomic_inc_return(&edev_no));
+#endif
 
 	if (edev->max_supported) {
 		char buf[10];
@@ -1251,6 +1356,13 @@ int extcon_dev_register(struct extcon_dev *edev)
 	edev->nh = devm_kcalloc(&edev->dev, edev->max_supported,
 				sizeof(*edev->nh), GFP_KERNEL);
 	if (!edev->nh) {
+		ret = -ENOMEM;
+		goto err_dev;
+	}
+
+	edev->bnh = devm_kzalloc(&edev->dev,
+			sizeof(*edev->bnh) * edev->max_supported, GFP_KERNEL);
+	if (!edev->bnh) {
 		ret = -ENOMEM;
 		goto err_dev;
 	}

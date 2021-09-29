@@ -273,9 +273,12 @@ static int refill_swap_slots_cache(struct swap_slots_cache *cache)
 int free_swap_slot(swp_entry_t entry)
 {
 	struct swap_slots_cache *cache;
+	struct swap_info_struct *si;
 
+	si = swp_swap_info(entry);
 	cache = raw_cpu_ptr(&swp_slots);
-	if (use_swap_slot_cache && cache->slots_ret) {
+	if (!(si->flags & SWP_SYNCHRONOUS_IO) &&
+				use_swap_slot_cache && cache->slots_ret) {
 		spin_lock_irq(&cache->free_lock);
 		/* Swap slots cache may be deactivated before acquiring lock */
 		if (!use_swap_slot_cache || !cache->slots_ret) {
@@ -326,7 +329,11 @@ swp_entry_t get_swap_page(struct page *page)
 	 */
 	cache = raw_cpu_ptr(&swp_slots);
 
+#ifdef CONFIG_HSWAP
+	if (check_cache_active() && current_is_kswapd()) {
+#else
 	if (check_cache_active()) {
+#endif
 		mutex_lock(&cache->alloc_lock);
 		if (cache->slots) {
 repeat:
@@ -345,7 +352,14 @@ repeat:
 			return entry;
 	}
 
+#ifdef CONFIG_HSWAP
+	if (!current_is_kswapd())
+		get_lowest_prio_swap_page(1, false, &entry);
+	else
+		get_swap_pages(1, false, &entry);
+#else
 	get_swap_pages(1, false, &entry);
+#endif
 
 	return entry;
 }

@@ -165,6 +165,9 @@ void ion_heap_freelist_add(struct ion_heap *heap, struct ion_buffer *buffer)
 	spin_lock(&heap->free_lock);
 	list_add(&buffer->list, &heap->free_list);
 	heap->free_list_size += buffer->size;
+#ifdef CONFIG_MIGRATE_HIGHORDER
+	heap->free_highorder_size += buffer->highorder_size;
+#endif
 	spin_unlock(&heap->free_lock);
 	wake_up(&heap->waitqueue);
 }
@@ -179,6 +182,19 @@ size_t ion_heap_freelist_size(struct ion_heap *heap)
 
 	return size;
 }
+
+#ifdef CONFIG_MIGRATE_HIGHORDER
+size_t ion_heap_free_highorder_size(struct ion_heap *heap)
+{
+	size_t size;
+
+	spin_lock(&heap->free_lock);
+	size = heap->free_highorder_size;
+	spin_unlock(&heap->free_lock);
+
+	return size;
+}
+#endif
 
 static size_t _ion_heap_freelist_drain(struct ion_heap *heap, size_t size,
 				       bool skip_pools)
@@ -200,9 +216,16 @@ static size_t _ion_heap_freelist_drain(struct ion_heap *heap, size_t size,
 					  list);
 		list_del(&buffer->list);
 		heap->free_list_size -= buffer->size;
+#ifdef CONFIG_MIGRATE_HIGHORDER
+		heap->free_highorder_size -= buffer->highorder_size;
+#endif
 		if (skip_pools)
 			buffer->private_flags |= ION_PRIV_FLAG_SHRINKER_FREE;
 		total_drained += buffer->size;
+#ifdef CONFIG_MIGRATE_HIGHORDER
+		if (skip_pools)
+			total_drained -= buffer->highorder_size;
+#endif
 		spin_unlock(&heap->free_lock);
 		ion_buffer_destroy(buffer);
 		spin_lock(&heap->free_lock);
@@ -241,6 +264,9 @@ static int ion_heap_deferred_free(void *data)
 					  list);
 		list_del(&buffer->list);
 		heap->free_list_size -= buffer->size;
+#ifdef CONFIG_MIGRATE_HIGHORDER
+		heap->free_highorder_size -= buffer->highorder_size;
+#endif
 		spin_unlock(&heap->free_lock);
 		ion_buffer_destroy(buffer);
 	}
@@ -250,8 +276,9 @@ static int ion_heap_deferred_free(void *data)
 
 int ion_heap_init_deferred_free(struct ion_heap *heap)
 {
+#ifndef CONFIG_ION_DEFER_FREE_NO_SCHED_IDLE
 	struct sched_param param = { .sched_priority = 0 };
-
+#endif
 	INIT_LIST_HEAD(&heap->free_list);
 	init_waitqueue_head(&heap->waitqueue);
 	heap->task = kthread_run(ion_heap_deferred_free, heap,
@@ -261,7 +288,9 @@ int ion_heap_init_deferred_free(struct ion_heap *heap)
 		       __func__);
 		return PTR_ERR_OR_ZERO(heap->task);
 	}
+#ifndef CONFIG_ION_DEFER_FREE_NO_SCHED_IDLE
 	sched_setscheduler(heap->task, SCHED_IDLE, &param);
+#endif
 	return 0;
 }
 
@@ -273,6 +302,9 @@ static unsigned long ion_heap_shrink_count(struct shrinker *shrinker,
 	int total = 0;
 
 	total = ion_heap_freelist_size(heap) / PAGE_SIZE;
+#ifdef CONFIG_MIGRATE_HIGHORDER
+	total -= ion_heap_free_highorder_size(heap) / PAGE_SIZE;
+#endif
 	if (heap->ops->shrink)
 		total += heap->ops->shrink(heap, sc->gfp_mask, 0);
 	return total;
@@ -314,3 +346,59 @@ void ion_heap_init_shrinker(struct ion_heap *heap)
 	heap->shrinker.batch = 0;
 	register_shrinker(&heap->shrinker);
 }
+
+struct ion_heap *ion_heap_create(struct ion_platform_heap *heap_data)
+{
+	struct ion_heap *heap = NULL;
+	int heap_type = heap_data->type;
+
+	switch (heap_type) {
+	case ION_HEAP_TYPE_SYSTEM_CONTIG:
+		pr_err("%s: Heap type is disabled: %d\n", __func__,
+		       heap_data->type);
+		break;
+	case ION_HEAP_TYPE_SYSTEM:
+		heap = ion_system_heap_create(heap_data);
+		break;
+	case ION_HEAP_TYPE_CARVEOUT:
+		heap = ion_carveout_heap_create(heap_data);
+		break;
+	case ION_HEAP_TYPE_CHUNK:
+		heap = ion_chunk_heap_create(heap_data);
+		break;
+#ifdef CONFIG_CMA
+	case (enum ion_heap_type)ION_HEAP_TYPE_SECURE_DMA:
+		heap = ion_secure_cma_heap_create(heap_data);
+		break;
+	case ION_HEAP_TYPE_DMA:
+		heap = ion_cma_heap_create(heap_data);
+		break;
+	case (enum ion_heap_type)ION_HEAP_TYPE_HYP_CMA:
+		heap = ion_cma_secure_heap_create(heap_data);
+		break;
+#endif
+	case (enum ion_heap_type)ION_HEAP_TYPE_SYSTEM_SECURE:
+		heap = ion_system_secure_heap_create(heap_data);
+		break;
+	case (enum ion_heap_type)ION_HEAP_TYPE_SECURE_CARVEOUT:
+		heap = ion_secure_carveout_heap_create(heap_data);
+		break;
+	default:
+		pr_err("%s: Invalid heap type %d\n", __func__,
+		       heap_data->type);
+		return ERR_PTR(-EINVAL);
+	}
+
+	if (IS_ERR_OR_NULL(heap)) {
+		pr_err("%s: error creating heap %s type %d base %pa size %zu\n",
+		       __func__, heap_data->name, heap_data->type,
+		       &heap_data->base, heap_data->size);
+		return ERR_PTR(-EINVAL);
+	}
+
+	heap->name = heap_data->name;
+	heap->id = heap_data->id;
+	heap->priv = heap_data->priv;
+	return heap;
+}
+EXPORT_SYMBOL(ion_heap_create);
