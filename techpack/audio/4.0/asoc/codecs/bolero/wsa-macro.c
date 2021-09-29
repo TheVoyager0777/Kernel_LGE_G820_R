@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -41,7 +41,7 @@
 #define NUM_INTERPOLATORS 2
 
 #define WSA_MACRO_MUX_INP_SHFT 0x3
-#define WSA_MACRO_MUX_INP_MASK1 0x07
+#define WSA_MACRO_MUX_INP_MASK1 0x38
 #define WSA_MACRO_MUX_INP_MASK2 0x38
 #define WSA_MACRO_MUX_CFG_OFFSET 0x8
 #define WSA_MACRO_MUX_CFG1_OFFSET 0x4
@@ -54,7 +54,6 @@
 #define WSA_MACRO_EC_MIX_TX0_MASK 0x03
 #define WSA_MACRO_EC_MIX_TX1_MASK 0x18
 
-#define WSA_MACRO_MAX_DMA_CH_PER_PORT 0x2
 
 enum {
 	WSA_MACRO_RX0 = 0,
@@ -97,14 +96,6 @@ enum {
 	INTn_1_INP_SEL_RX3,
 	INTn_1_INP_SEL_DEC0,
 	INTn_1_INP_SEL_DEC1,
-};
-
-enum {
-	INTn_2_INP_SEL_ZERO = 0,
-	INTn_2_INP_SEL_RX0,
-	INTn_2_INP_SEL_RX1,
-	INTn_2_INP_SEL_RX2,
-	INTn_2_INP_SEL_RX3,
 };
 
 struct interp_sample_rate {
@@ -617,13 +608,13 @@ static int wsa_macro_set_prim_interpolator_rate(struct snd_soc_dai *dai,
 			inp0_sel = int_mux_cfg0_val & WSA_MACRO_MUX_INP_MASK1;
 			inp1_sel = (int_mux_cfg0_val >>
 					WSA_MACRO_MUX_INP_SHFT) &
-					WSA_MACRO_MUX_INP_MASK1;
+					WSA_MACRO_MUX_INP_MASK2;
 			inp2_sel = (int_mux_cfg1_val >>
 					WSA_MACRO_MUX_INP_SHFT) &
-					WSA_MACRO_MUX_INP_MASK1;
-			if ((inp0_sel == int_1_mix1_inp + INTn_1_INP_SEL_RX0) ||
-			    (inp1_sel == int_1_mix1_inp + INTn_1_INP_SEL_RX0) ||
-			    (inp2_sel == int_1_mix1_inp + INTn_1_INP_SEL_RX0)) {
+					WSA_MACRO_MUX_INP_MASK2;
+			if ((inp0_sel == int_1_mix1_inp) ||
+			    (inp1_sel == int_1_mix1_inp) ||
+			    (inp2_sel == int_1_mix1_inp)) {
 				int_fs_reg = BOLERO_CDC_WSA_RX0_RX_PATH_CTL +
 					     WSA_MACRO_RX_PATH_OFFSET * j;
 				dev_dbg(wsa_dev,
@@ -675,8 +666,7 @@ static int wsa_macro_set_mix_interpolator_rate(struct snd_soc_dai *dai,
 		for (j = 0; j < NUM_INTERPOLATORS; j++) {
 			int_mux_cfg1_val = snd_soc_read(codec, int_mux_cfg1) &
 							WSA_MACRO_MUX_INP_MASK1;
-			if (int_mux_cfg1_val == int_2_inp +
-							INTn_2_INP_SEL_RX0) {
+			if (int_mux_cfg1_val == int_2_inp) {
 				int_fs_reg =
 					BOLERO_CDC_WSA_RX0_RX_PATH_MIX_CTL +
 					WSA_MACRO_RX_PATH_OFFSET * j;
@@ -771,7 +761,7 @@ static int wsa_macro_get_channel_map(struct snd_soc_dai *dai,
 	struct snd_soc_codec *codec = dai->codec;
 	struct device *wsa_dev = NULL;
 	struct wsa_macro_priv *wsa_priv = NULL;
-	u16 val = 0, mask = 0, cnt = 0, temp = 0;;
+	u16 val = 0, mask = 0, cnt = 0;
 
 	if (!wsa_macro_get_data(codec, &wsa_dev, &wsa_priv, __func__))
 		return -EINVAL;
@@ -787,16 +777,8 @@ static int wsa_macro_get_channel_map(struct snd_soc_dai *dai,
 		break;
 	case WSA_MACRO_AIF1_PB:
 	case WSA_MACRO_AIF_MIX1_PB:
-		for_each_set_bit(temp, &wsa_priv->active_ch_mask[dai->id],
-					WSA_MACRO_RX_MAX) {
-			mask |= (1 << temp);
-			if (++cnt == WSA_MACRO_MAX_DMA_CH_PER_PORT)
-				break;
-		}
-		if (mask & 0x0C)
-			mask = mask >> 0x2;
-		*rx_slot = mask;
-		*rx_num = cnt;
+		*rx_slot = wsa_priv->active_ch_mask[dai->id];
+		*rx_num = wsa_priv->active_ch_cnt[dai->id];
 		break;
 	case WSA_MACRO_AIF_ECHO:
 		val = snd_soc_read(codec,
@@ -855,12 +837,9 @@ static int wsa_macro_digital_mute(struct snd_soc_dai *dai, int mute)
 			if (int_mux_cfg0_val || (int_mux_cfg1_val & 0x38))
 				snd_soc_update_bits(codec, reg,
 							0x20, 0x20);
-			if (int_mux_cfg1_val & 0x07) {
-				snd_soc_update_bits(codec, reg,
-							0x20, 0x20);
+			if (int_mux_cfg1_val & 0x07)
 				snd_soc_update_bits(codec,
 						mix_reg, 0x20, 0x20);
-			}
 		}
 	}
 	bolero_wsa_pa_on(wsa_dev);
@@ -987,8 +966,10 @@ static int wsa_macro_event_handler(struct snd_soc_codec *codec, u16 event,
 
 	switch (event) {
 	case BOLERO_MACRO_EVT_SSR_DOWN:
-		trace_printk("%s, enter SSR down\n", __func__);
 		if (wsa_priv->swr_ctrl_data) {
+			swrm_wcd_notify(
+				wsa_priv->swr_ctrl_data[0].wsa_swr_pdev,
+				SWR_DEVICE_DOWN, NULL);
 			swrm_wcd_notify(
 				wsa_priv->swr_ctrl_data[0].wsa_swr_pdev,
 				SWR_DEVICE_SSR_DOWN, NULL);
@@ -1004,7 +985,6 @@ static int wsa_macro_event_handler(struct snd_soc_codec *codec, u16 event,
 		}
 		break;
 	case BOLERO_MACRO_EVT_SSR_UP:
-		trace_printk("%s, enter SSR up\n", __func__);
 		/* reset swr after ssr/pdr */
 		wsa_priv->reset_swr = true;
 		/* enable&disable WSA_CORE_CLK to reset GFMUX reg */
@@ -2145,6 +2125,8 @@ static int wsa_macro_rx_mux_put(struct snd_kcontrol *kcontrol,
 	wsa_priv->rx_port_value[widget->shift] = rx_port_value;
 
 	bit_input = widget->shift;
+	if (widget->shift >= WSA_MACRO_RX_MIX)
+		bit_input %= WSA_MACRO_RX_MIX;
 
 	dev_dbg(wsa_dev,
 		"%s: mux input: %d, mux output: %d, bit: %d\n",
@@ -2166,8 +2148,7 @@ static int wsa_macro_rx_mux_put(struct snd_kcontrol *kcontrol,
 		break;
 	default:
 		dev_err(wsa_dev,
-			"%s: Invalid AIF_ID for WSA RX MUX %d\n",
-			__func__, rx_port_value);
+			"%s: Invalid AIF_ID for WSA RX MUX\n", __func__);
 		return -EINVAL;
 	}
 
@@ -2728,6 +2709,7 @@ static void wsa_macro_init_reg(struct snd_soc_codec *codec)
 static int wsa_macro_core_vote(void *handle, bool enable)
 {
 	struct wsa_macro_priv *wsa_priv = (struct wsa_macro_priv *) handle;
+	int ret = 0;
 
 	if (wsa_priv == NULL) {
 		pr_err("%s: wsa priv data is NULL\n", __func__);
@@ -2739,10 +2721,7 @@ static int wsa_macro_core_vote(void *handle, bool enable)
 		pm_runtime_mark_last_busy(wsa_priv->dev);
 	}
 
-	if (bolero_check_core_votes(wsa_priv->dev))
-		return 0;
-	else
-		return -EINVAL;
+	return ret;
 }
 
 static int wsa_swrm_clock(void *handle, bool enable)
@@ -2758,9 +2737,6 @@ static int wsa_swrm_clock(void *handle, bool enable)
 
 	mutex_lock(&wsa_priv->swr_clk_lock);
 
-	trace_printk("%s: %s swrm clock %s\n",
-		dev_name(wsa_priv->dev), __func__,
-		(enable ? "enable" : "disable"));
 	dev_dbg(wsa_priv->dev, "%s: swrm clock %s\n",
 		__func__, (enable ? "enable" : "disable"));
 	if (enable) {
@@ -2826,9 +2802,6 @@ static int wsa_swrm_clock(void *handle, bool enable)
 			}
 		}
 	}
-	trace_printk("%s: %s swrm clock users: %d\n",
-		dev_name(wsa_priv->dev), __func__,
-		wsa_priv->swr_clk_users);
 	dev_dbg(wsa_priv->dev, "%s: swrm clock users %d\n",
 		__func__, wsa_priv->swr_clk_users);
 exit:
@@ -3071,8 +3044,7 @@ static int wsa_macro_probe(struct platform_device *pdev)
 			__func__);
 		return -EINVAL;
 	}
-	if (msm_cdc_pinctrl_get_state(wsa_priv->wsa_swr_gpio_p) < 0 &&
-			is_used_wsa_swr_gpio) {
+	if (msm_cdc_pinctrl_get_state(wsa_priv->wsa_swr_gpio_p) < 0) {
 		dev_err(&pdev->dev, "%s: failed to get swr pin state\n",
 			__func__);
 		return -EPROBE_DEFER;
@@ -3132,7 +3104,6 @@ static int wsa_macro_probe(struct platform_device *pdev)
 	pm_runtime_set_autosuspend_delay(&pdev->dev, AUTO_SUSPEND_DELAY);
 	pm_runtime_use_autosuspend(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
-	pm_suspend_ignore_children(&pdev->dev, true);
 	pm_runtime_enable(&pdev->dev);
 
 	return ret;
@@ -3170,10 +3141,6 @@ static const struct of_device_id wsa_macro_dt_match[] = {
 };
 
 static const struct dev_pm_ops bolero_dev_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(
-		pm_runtime_force_suspend,
-		pm_runtime_force_resume
-	)
 	SET_RUNTIME_PM_OPS(
 		bolero_runtime_suspend,
 		bolero_runtime_resume,

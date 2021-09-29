@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -33,18 +33,8 @@
 #include <dt-bindings/sound/audio-codec-port-types.h>
 #include "../msm-cdc-supply.h"
 
-#ifdef CONFIG_MACH_LGE // add extcon dev for SAR backoff
-#include <linux/extcon.h>
-
-static const unsigned int extcon_sar_backoff[] = {
-	EXTCON_MECHANICAL,
-	EXTCON_NONE,
-};
-#endif /* CONFIG_MACH_LGE */
-
 #define WCD9370_VARIANT 0
 #define WCD9375_VARIANT 5
-#define WCD937X_VARIANT_ENTRY_SIZE 32
 
 #define NUM_SWRS_DT_PARAMS 5
 
@@ -866,12 +856,6 @@ static int wcd937x_codec_enable_ear_pa(struct snd_soc_dapm_widget *w,
 				WCD937X_ANA_EAR_COMPANDER_CTL, 0x80, 0x80);
 		break;
 	case SND_SOC_DAPM_POST_PMU:
-#ifdef CONFIG_MACH_LGE  // SAR backoff
-		if( wcd937x->sar != NULL ) {
-			pr_info("%s : enable SAR backoff\n", __func__);
-			extcon_set_state_sync(wcd937x->sar, EXTCON_MECHANICAL, true);
-        }
-#endif /* CONFIG_MACH_LGE */
 		usleep_range(6000, 6010);
 		if (hph_mode == CLS_AB || hph_mode == CLS_AB_HIFI)
 			snd_soc_update_bits(codec, WCD937X_ANA_RX_SUPPLIES,
@@ -888,12 +872,6 @@ static int wcd937x_codec_enable_ear_pa(struct snd_soc_dapm_widget *w,
 						(WCD_RX1 << 0x10 | 0x1));
 		break;
 	case SND_SOC_DAPM_POST_PMD:
-#ifdef CONFIG_MACH_LGE  // SAR backoff
-		if( wcd937x->sar != NULL ) {
-			pr_info("%s : disable SAR backoff\n", __func__);
-			extcon_set_state_sync(wcd937x->sar, EXTCON_MECHANICAL, false);
-		}
-#endif /* CONFIG_MACH_LGE */
 		if (!wcd937x->comp1_enable)
 			snd_soc_update_bits(codec,
 				WCD937X_ANA_EAR_COMPANDER_CTL, 0x80, 0x00);
@@ -1413,21 +1391,6 @@ int wcd937x_micbias_control(struct snd_soc_codec *codec,
 	return 0;
 }
 EXPORT_SYMBOL(wcd937x_micbias_control);
-
-void wcd937x_disable_bcs_before_slow_insert(struct snd_soc_codec *codec,
-					    bool bcs_disable)
-{
-	struct wcd937x_priv *wcd937x = snd_soc_codec_get_drvdata(codec);
-
-	if (wcd937x->update_wcd_event) {
-		if (bcs_disable)
-			wcd937x->update_wcd_event(wcd937x->handle,
-						WCD_BOLERO_EVT_BCS_CLK_OFF, 0);
-		else
-			wcd937x->update_wcd_event(wcd937x->handle,
-						WCD_BOLERO_EVT_BCS_CLK_OFF, 1);
-	}
-}
 
 static int wcd937x_get_logical_addr(struct swr_device *swr_dev)
 {
@@ -2122,47 +2085,12 @@ static struct snd_info_entry_ops wcd937x_info_ops = {
 	.read = wcd937x_version_read,
 };
 
-
-static ssize_t wcd937x_variant_read(struct snd_info_entry *entry,
-				    void *file_private_data,
-				    struct file *file,
-				    char __user *buf, size_t count,
-				    loff_t pos)
-{
-	struct wcd937x_priv *priv;
-	char buffer[WCD937X_VARIANT_ENTRY_SIZE];
-	int len = 0;
-
-	priv = (struct wcd937x_priv *) entry->private_data;
-	if (!priv) {
-		pr_err("%s: wcd937x priv is null\n", __func__);
-		return -EINVAL;
-	}
-
-	switch (priv->variant) {
-	case WCD9370_VARIANT:
-		len = snprintf(buffer, sizeof(buffer), "WCD9370\n");
-		break;
-	case WCD9375_VARIANT:
-		len = snprintf(buffer, sizeof(buffer), "WCD9375\n");
-		break;
-	default:
-		len = snprintf(buffer, sizeof(buffer), "VER_UNDEFINED\n");
-	}
-
-	return simple_read_from_buffer(buf, count, &pos, buffer, len);
-}
-
-static struct snd_info_entry_ops wcd937x_variant_ops = {
-	.read = wcd937x_variant_read,
-};
-
 /*
  * wcd937x_info_create_codec_entry - creates wcd937x module
  * @codec_root: The parent directory
  * @codec: Codec instance
  *
- * Creates wcd937x module, variant and version entry under the given
+ * Creates wcd937x module and version entry under the given
  * parent directory.
  *
  * Return: 0 on success or negative error code on failure.
@@ -2171,7 +2099,6 @@ int wcd937x_info_create_codec_entry(struct snd_info_entry *codec_root,
 				   struct snd_soc_codec *codec)
 {
 	struct snd_info_entry *version_entry;
-	struct snd_info_entry *variant_entry;
 	struct wcd937x_priv *priv;
 	struct snd_soc_card *card;
 
@@ -2212,25 +2139,6 @@ int wcd937x_info_create_codec_entry(struct snd_info_entry *codec_root,
 	}
 	priv->version_entry = version_entry;
 
-	variant_entry = snd_info_create_card_entry(card->snd_card,
-						   "variant",
-						   priv->entry);
-	if (!variant_entry) {
-		dev_dbg(codec->dev, "%s: failed to create wcd937x variant entry\n",
-			__func__);
-		return -ENOMEM;
-	}
-
-	variant_entry->private_data = priv;
-	variant_entry->size = WCD937X_VARIANT_ENTRY_SIZE;
-	variant_entry->content = SNDRV_INFO_CONTENT_DATA;
-	variant_entry->c.ops = &wcd937x_variant_ops;
-
-	if (snd_info_register(variant_entry) < 0) {
-		snd_info_free_entry(variant_entry);
-		return -ENOMEM;
-	}
-	priv->variant_entry = variant_entry;
 	return 0;
 }
 EXPORT_SYMBOL(wcd937x_info_create_codec_entry);
@@ -2783,22 +2691,6 @@ static int wcd937x_bind(struct device *dev)
 				__func__);
 		goto err_irq;
 	}
-#ifdef CONFIG_MACH_LGE	 // SAR backoff
-	wcd937x->sar = devm_extcon_dev_allocate(dev, extcon_sar_backoff);
-	if (IS_ERR(wcd937x->sar)) {
-		dev_err(dev, "failed to allocate extcon device\n");
-		return -ENOMEM;
-	}
-
-	wcd937x->sar->name = "sar_backoff";
-	ret = devm_extcon_dev_register(dev, wcd937x->sar);
-	if (ret < 0) {
-		dev_err(dev, "extcon_dev_register() failed: %d\n",
-			ret);
-		return ret;
-	}
-		pr_info("%s register sar_backoff extcon device\n",__func__);
-#endif  /* CONFIG_MACH_LGE */
 
 	return ret;
 err_irq:
@@ -2816,11 +2708,6 @@ static void wcd937x_unbind(struct device *dev)
 {
 	struct wcd937x_priv *wcd937x = dev_get_drvdata(dev);
 	struct wcd937x_pdata *pdata = dev_get_platdata(wcd937x->dev);
-
-#ifdef CONFIG_MACH_LGE // SAR backoff
-	if( wcd937x->sar != NULL )
-		devm_extcon_dev_unregister(dev, wcd937x->sar);
-#endif /* CONFIG_MACH_LGE */
 
 	wcd_irq_exit(&wcd937x->irq_info, wcd937x->virq);
 	snd_soc_unregister_codec(dev);

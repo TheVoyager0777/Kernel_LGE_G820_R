@@ -104,7 +104,8 @@ static int q6lsm_get_session_id_from_lsm_client(struct lsm_client *client)
 		if (lsm_session[n] == client)
 			return n;
 	}
-	pr_err("%s: cannot find matching lsm client.\n", __func__);
+	pr_err("%s: cannot find matching lsm client. client = %pa\n",
+		__func__, client);
 	return LSM_INVALID_SESSION_ID;
 }
 
@@ -284,15 +285,12 @@ static void *q6lsm_mmap_apr_reg(void)
 
 static int q6lsm_mmap_apr_dereg(void)
 {
-	if (lsm_common.apr) {
-		if (atomic_read(&lsm_common.apr_users) <= 0) {
-			WARN("%s: APR common port already closed\n", __func__);
-		} else {
-			if (atomic_dec_return(&lsm_common.apr_users) == 0) {
-				apr_deregister(lsm_common.apr);
-				pr_debug("%s: APR De-Register common port\n",
-					__func__);
-			}
+	if (atomic_read(&lsm_common.apr_users) <= 0) {
+		WARN("%s: APR common port already closed\n", __func__);
+	} else {
+		if (atomic_dec_return(&lsm_common.apr_users) == 0) {
+			apr_deregister(lsm_common.apr);
+			pr_debug("%s: APR De-Register common port\n", __func__);
 		}
 	}
 	return 0;
@@ -375,10 +373,10 @@ void q6lsm_client_free(struct lsm_client *client)
 		return;
 	}
 	apr_deregister(client->apr);
-	q6lsm_mmap_apr_dereg();
 	client->mmap_apr = NULL;
 	mutex_lock(&session_lock);
 	q6lsm_session_free(client);
+	q6lsm_mmap_apr_dereg();
 	mutex_destroy(&client->cmd_lock);
 	kfree(client);
 	client = NULL;
@@ -1973,7 +1971,7 @@ int q6lsm_snd_model_buf_alloc(struct lsm_client *client, size_t len,
 	size_t total_mem = 0;
 	struct lsm_sound_model *sm = NULL;
 
-	if (!client)
+	if (!client || len <= LSM_ALIGN_BOUNDARY)
 		return rc;
 
 	pr_debug("%s:Snd Model len = %zd, stage idx %d\n",

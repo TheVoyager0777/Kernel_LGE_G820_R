@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -21,7 +21,9 @@
 #include <linux/input.h>
 #include <linux/of_device.h>
 #include <linux/pm_qos.h>
+#ifdef CONFIG_QCOM_FSA4480_I2C
 #include <linux/soc/qcom/fsa4480-i2c.h>
+#endif
 #include <sound/core.h>
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
@@ -219,9 +221,6 @@ struct msm_asoc_mach_data {
 	struct device_node *hph_en1_gpio_p; /* used by pinctrl API */
 	struct device_node *hph_en0_gpio_p; /* used by pinctrl API */
 	struct device_node *fsa_handle;
-	#ifndef CONFIG_MACH_LGE // temp CVE-2017-0609 fail
-	struct device_node *mi2s_gpio_p[MI2S_MAX]; /* used by pinctrl API */
-	#endif
 	struct snd_soc_codec *codec;
 	struct work_struct adsp_power_up_work;
 };
@@ -890,10 +889,6 @@ int cs43130_module_dep(void);
 #if defined(CONFIG_SND_SOC_CS35L41)
 int	cs35l41_module_dep(void);
 #endif
-#if defined(CONFIG_SND_SOC_ES9218P)
-int	es9218_module_dep(void);
-#endif
-
 
 /*
  * Need to report LINEIN
@@ -2909,15 +2904,9 @@ static int mi2s_get_sample_rate(int value)
 	case 8:
 		sample_rate = SAMPLING_RATE_96KHZ;
 		break;
-#ifdef CONFIG_MACH_SM8150_ALPHA
-	case 9:
-		sample_rate = SAMPLING_RATE_192KHZ;
-		break;
-#else
 	case 9:
 		sample_rate = SAMPLING_RATE_176P4KHZ;
 		break;
-#endif
 	case 10:
 		sample_rate = SAMPLING_RATE_192KHZ;
 		break;
@@ -4234,6 +4223,7 @@ done:
 	return rc;
 }
 
+#ifdef CONFIG_QCOM_FSA4480_I2C
 static bool msm_usbc_swap_gnd_mic(struct snd_soc_codec *codec, bool active)
 {
 	struct snd_soc_card *card = codec->component.card;
@@ -4245,6 +4235,7 @@ static bool msm_usbc_swap_gnd_mic(struct snd_soc_codec *codec, bool active)
 
 	return fsa4480_switch_event(pdata->fsa_handle, FSA_MIC_GND_SWAP);
 }
+#endif
 
 static bool msm_swap_gnd_mic(struct snd_soc_codec *codec, bool active)
 {
@@ -4263,8 +4254,10 @@ static bool msm_swap_gnd_mic(struct snd_soc_codec *codec, bool active)
 	if (!pdata)
 		return false;
 
+#ifdef CONFIG_QCOM_FSA4480_I2C
 	if (wcd_mbhc_cfg.enable_usbc_analog)
 		return msm_usbc_swap_gnd_mic(codec, active);
+#endif
 
 	/* if usbc is not defined, swap using us_euro_gpio_p */
 	if (pdata->us_euro_gpio_p) {
@@ -5485,7 +5478,6 @@ static int msm_tdm_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 					SNDRV_PCM_HW_PARAM_RATE);
 	struct snd_interval *channels = hw_param_interval(params,
 					SNDRV_PCM_HW_PARAM_CHANNELS);
-
 	if (cpu_dai->id == AFE_PORT_ID_QUATERNARY_TDM_RX) {
 		channels->min = channels->max =
 				tdm_rx_cfg[TDM_QUAT][TDM_0].channels;
@@ -5810,15 +5802,14 @@ static int msm_mi2s_snd_startup(struct snd_pcm_substream *substream)
 		ret = msm_mi2s_set_sclk(substream, true);
 		if (ret < 0) {
 			dev_err(rtd->card->dev,
-				"%s: afe lpass clock failed ",
-				"to enable MI2S clock, err:%d\n",
+				"%s: afe lpass clock failed to enable MI2S clock, err:%d\n",
 				__func__, ret);
 			goto clean_up;
 		}
 
 		ret = snd_soc_dai_set_fmt(cpu_dai, fmt);
 		if (ret < 0) {
-			pr_err("%s: set fmt cpu dai failed for MI2S(%d) err:%d\n",
+			pr_err("%s: set fmt cpu dai failed for MI2S (%d), err:%d\n",
 				__func__, index, ret);
 			goto clk_off;
 		}
@@ -5844,15 +5835,10 @@ static int msm_mi2s_snd_startup(struct snd_pcm_substream *substream)
 #else
 		if (index == QUAT_MI2S) {
 			ret_pinctrl = msm_set_pinctrl(pinctrl_info,
-							STATE_MI2S_ACTIVE);
-			if (ret_pinctrl) {
-				pr_err("%s: MI2S TLMM pinctrl set failed %d",
-					"switching to gpio\n",
+						      STATE_MI2S_ACTIVE);
+			if (ret_pinctrl)
+				pr_err("%s: MI2S TLMM pinctrl set failed with %d\n",
 					__func__, ret_pinctrl);
-				if (pdata->mi2s_gpio_p[index])
-					msm_cdc_pinctrl_select_active_state(
-						pdata->mi2s_gpio_p[index]);
-			}
 		}
 #endif
 	}
@@ -5888,7 +5874,7 @@ static void msm_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 	if (--mi2s_intf_conf[index].ref_cnt == 0) {
 		ret = msm_mi2s_set_sclk(substream, false);
 		if (ret < 0)
-			pr_err("%s:clock disable failed for MI2S(%d) ret=%d\n",
+			pr_err("%s:clock disable failed for MI2S (%d); ret=%d\n",
 				__func__, index, ret);
 #ifdef CONFIG_MACH_LGE
 	if (index == SEC_MI2S) {
@@ -5912,15 +5898,10 @@ static void msm_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 #else
 		if (index == QUAT_MI2S) {
 			ret_pinctrl = msm_set_pinctrl(pinctrl_info,
-							STATE_DISABLE);
-			if (ret_pinctrl) {
-				pr_err("%s: MI2S TLMM pinctrl set failed %d",
-					"switching to gpio\n",
+						      STATE_DISABLE);
+			if (ret_pinctrl)
+				pr_err("%s: MI2S TLMM pinctrl set failed with %d\n",
 					__func__, ret_pinctrl);
-				if (pdata->mi2s_gpio_p[index])
-					msm_cdc_pinctrl_select_sleep_state(
-					pdata->mi2s_gpio_p[index]);
-			}
 		}
 #endif
 	}
@@ -6697,56 +6678,6 @@ static struct snd_soc_dai_link msm_common_misc_fe_dai_links[] = {
 		.ignore_pmdown_time = 1,
 		.id = MSM_FRONTEND_DAI_MULTIMEDIA31,
 	},
-#ifndef CONFIG_MACH_LGE // temp CVE-2017-0609 fail
-	{
-		.name = "Quaternary MI2S_RX Hostless Playback",
-		.stream_name = "Quaternary MI2S_RX Hostless Playback",
-		.cpu_dai_name = "QUAT_MI2S_RX_HOSTLESS",
-		.platform_name = "msm-pcm-hostless",
-		.dynamic = 1,
-		.dpcm_playback = 1,
-		.trigger = {SND_SOC_DPCM_TRIGGER_POST,
-			SND_SOC_DPCM_TRIGGER_POST},
-		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
-		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1,
-		.codec_dai_name = "snd-soc-dummy-dai",
-		.codec_name = "snd-soc-dummy",
-	},
-	{
-		.name = "Quaternary MI2S_TX Hostless Capture",
-		.stream_name = "Quaternary MI2S_TX Hostless Capture",
-		.cpu_dai_name = "QUAT_MI2S_TX_HOSTLESS",
-		.platform_name = "msm-pcm-hostless",
-		.dynamic = 1,
-		.dpcm_capture = 1,
-		.trigger = {SND_SOC_DPCM_TRIGGER_POST,
-			SND_SOC_DPCM_TRIGGER_POST},
-		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
-		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1,
-		.codec_dai_name = "snd-soc-dummy-dai",
-		.codec_name = "snd-soc-dummy",
-	},
-#endif
-/* Voice Stub */
-	{
-		.name = "Voice Stub",
-		.stream_name = "Voice Stub",
-		.cpu_dai_name = "VOICE_STUB",
-		.platform_name = "msm-pcm-hostless",
-		.dynamic = 1,
-		.dpcm_playback = 1,
-		.dpcm_capture = 1,
-		.trigger = {SND_SOC_DPCM_TRIGGER_POST,
-		 SND_SOC_DPCM_TRIGGER_POST},
-		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
-		.ignore_suspend = 1,
-		/* this dainlink has playback support */
-		.ignore_pmdown_time = 1,
-		.codec_dai_name = "snd-soc-dummy-dai",
-		.codec_name = "snd-soc-dummy",
-	},
 };
 
 static struct snd_soc_dai_link msm_common_be_dai_links[] = {
@@ -6836,33 +6767,6 @@ static struct snd_soc_dai_link msm_common_be_dai_links[] = {
 		.be_hw_params_fixup = msm_be_hw_params_fixup,
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-	},
-	/* Proxy Tx BACK END DAI Link */
-	{
-		.name = LPASS_BE_PROXY_TX,
-		.stream_name = "Proxy Capture",
-		.cpu_dai_name = "msm-dai-q6-dev.8195",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "msm-stub-codec.1",
-		.codec_dai_name = "msm-stub-tx",
-		.no_pcm = 1,
-		.dpcm_capture = 1,
-		.id = MSM_BACKEND_DAI_PROXY_TX,
-		.ignore_suspend = 1,
-	},
-	/* Proxy Rx BACK END DAI Link */
-	{
-		.name = LPASS_BE_PROXY_RX,
-		.stream_name = "Proxy Playback",
-		.cpu_dai_name = "msm-dai-q6-dev.8194",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "msm-stub-codec.1",
-		.codec_dai_name = "msm-stub-rx",
-		.no_pcm = 1,
-		.dpcm_playback = 1,
-		.id = MSM_BACKEND_DAI_PROXY_RX,
-		.ignore_pmdown_time = 1,
-		.ignore_suspend = 1,
 	},
 	{
 		.name = LPASS_BE_USB_AUDIO_RX,
@@ -8285,11 +8189,6 @@ struct snd_soc_card snd_soc_card_tavil_msm = {
 	.late_probe	= msm_snd_card_tavil_late_probe,
 };
 
-struct snd_soc_card snd_soc_card_hanasdx_msm = {
-	.name		= "sm8150-hana55-snd-card",
-	.late_probe	= msm_snd_card_tavil_late_probe,
-};
-
 static int msm_populate_dai_link_component_of_node(
 					struct snd_soc_card *card)
 {
@@ -8531,8 +8430,6 @@ static const struct of_device_id sm8150_asoc_machine_of_match[]  = {
 	  .data = "tavil_codec"},
 	{ .compatible = "qcom,sm8150-asoc-snd-stub",
 	  .data = "stub_codec"},
-	{ .compatible = "qcom,sm8150-asoc-snd-hana55",
-	  .data = "tavil_codec"},
 	{},
 };
 
@@ -8621,10 +8518,7 @@ static struct snd_soc_card *populate_snd_card_dailinks(struct device *dev)
 
 		dailink = msm_pahu_snd_card_dai_links;
 	}  else if (!strcmp(match->data, "tavil_codec")) {
-		if (!strcmp(match->compatible, "qcom,sm8150-asoc-snd-hana55"))
-			card = &snd_soc_card_hanasdx_msm;
-		else
-			card = &snd_soc_card_tavil_msm;
+		card = &snd_soc_card_tavil_msm;
 		len_1 = ARRAY_SIZE(msm_common_dai_links);
 		len_2 = len_1 + ARRAY_SIZE(msm_tavil_fe_dai_links);
 		len_3 = len_2 + ARRAY_SIZE(msm_common_misc_fe_dai_links);
@@ -9011,9 +8905,6 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 #if defined(CONFIG_SND_SOC_CS35L41)
 	cs35l41_module_dep();
 #endif
-#if defined(CONFIG_SND_SOC_ES9218P)
-	es9218_module_dep();
-#endif
 
 	if (!pdev->dev.of_node) {
 		dev_err(&pdev->dev, "No platform supplied from device tree\n");
@@ -9198,7 +9089,7 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 			"qcom,us-euro-gpios");
 		wcd_mbhc_cfg.swap_gnd_mic = msm_swap_gnd_mic;
 	}
-
+#ifdef CONFIG_QCOM_FSA4480_I2C
 	if (wcd_mbhc_cfg.enable_usbc_analog)
 		wcd_mbhc_cfg.swap_gnd_mic = msm_usbc_swap_gnd_mic;
 
@@ -9207,20 +9098,17 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 	if (!pdata->fsa_handle)
 		dev_dbg(&pdev->dev, "property %s not detected in node %s\n",
 			"fsa4480-i2c-handle", pdev->dev.of_node->full_name);
+#endif
 
 	/* Parse pinctrl info from devicetree */
 	ret = msm_get_pinctrl(pdev);
 	if (!ret) {
 		pr_debug("%s: pinctrl parsing successful\n", __func__);
 	} else {
-		pr_err("%s: Parsing pinctrl failed %d. switching to gpio\n",
+		dev_dbg(&pdev->dev,
+			"%s: Parsing pinctrl failed with %d. Cannot use Ports\n",
 			__func__, ret);
 		ret = 0;
-		#ifndef CONFIG_MACH_LGE // temp CVE-2017-0609 fail
-		pdata->mi2s_gpio_p[QUAT_MI2S] =
-			of_parse_phandle(pdev->dev.of_node,
-				"qcom,quat-mi2s-gpios", 0);
-		#endif
 	}
 
 	msm_i2s_auxpcm_init(pdev);
