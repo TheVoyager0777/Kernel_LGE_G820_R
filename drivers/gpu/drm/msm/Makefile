@@ -8,6 +8,7 @@ ccflags-y += -Idrivers/media/platform/msm/sde/rotator
 ccflags-y += -Idrivers/gpu/drm/msm/hdmi
 ccflags-$(CONFIG_DRM_SDE_SHD) += -Idrivers/gpu/drm/msm/shd
 ccflags-$(CONFIG_DRM_SDE_SHP) += -Idrivers/gpu/drm/msm/shp
+ccflags-$(CONFIG_LGE_PM_PRM) += -Idrivers/soc/qcom/lge/power
 
 msm_drm-y := \
 	dp/dp_usbpd.o \
@@ -53,9 +54,8 @@ msm_drm-y := \
 	sde/sde_hw_ad4.o \
 	sde_edid_parser.o \
 	sde_hdcp_1x.o \
-	sde_hdcp_2x.o
-
-msm_drm-$(CONFIG_DEBUG_FS) += sde_dbg.o \
+	sde_hdcp_2x.o \
+	sde_dbg.o \
 	sde_dbg_evtlog.o \
 
 msm_drm-$(CONFIG_DRM_MSM_HDMI) += hdmi/hdmi.o \
@@ -219,5 +219,7 @@ msm_drm-$(CONFIG_DRM_MSM) += \
 	msm_prop.o \
 	msm_fence.o \
 	msm_debugfs.o
+
+obj-$(CONFIG_LGE_DISPLAY_COMMON) += lge/
 
 obj-$(CONFIG_DRM_MSM)	+= msm_drm.o
