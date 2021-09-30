@@ -209,7 +209,20 @@ static int tmc_read_prepare(struct tmc_drvdata *drvdata)
 }
 
 static int tmc_read_unprepare(struct tmc_drvdata *drvdata)
-{drivers/hwtracing/coresight/coresight-tmc.c
+{
+	int ret = 0;
+
+	if (!drvdata->csdev->enable)
+		return -EPERM;
+
+	switch (drvdata->config_type) {
+	case TMC_CONFIG_TYPE_ETB:
+	case TMC_CONFIG_TYPE_ETF:
+		ret = tmc_read_unprepare_etb(drvdata);
+		break;
+	case TMC_CONFIG_TYPE_ETR:
+		ret = tmc_read_unprepare_etr(drvdata);
+		break;
 	default:
 		ret = -EINVAL;
 	}
