@@ -1468,7 +1468,7 @@ int ext4_search_dir(struct buffer_head *bh, char *search_buf, int buf_size,
 			/* found a match - just to be sure, do
 			 * a full check */
 			if (ext4_check_dir_entry(dir, NULL, de, bh, search_buf,
-						 buf_size, offset))
+						 buf_size, lblk, offset))
 				return -1;
 			*res_dir = de;
 			return 1;
@@ -2517,10 +2517,11 @@ again:
 						   (frame - 1)->bh);
 			if (err)
 				goto journal_error;
+			if (restart) {	
 			err = ext4_handle_dirty_dx_node(handle, dir,
 							frame->bh);
-			if (err)
 				goto journal_error;
+			}
 		} else {
 			struct dx_root *dxroot;
 			memcpy((char *) entries2, (char *) entries,
@@ -2587,7 +2588,7 @@ int ext4_generic_delete_entry(handle_t *handle,
 	de = (struct ext4_dir_entry_2 *)entry_buf;
 	while (i < buf_size - csum_size) {
 		if (ext4_check_dir_entry(dir, NULL, de, bh,
-					 entry_buf, buf_size, i))
+					 entry_buf, buf_size, lblk, i))
 			return -EFSCORRUPTED;
 		if (de == de_del)  {
 			if (pde)
