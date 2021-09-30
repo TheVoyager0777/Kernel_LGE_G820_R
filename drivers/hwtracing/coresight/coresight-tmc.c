@@ -209,20 +209,7 @@ static int tmc_read_prepare(struct tmc_drvdata *drvdata)
 }
 
 static int tmc_read_unprepare(struct tmc_drvdata *drvdata)
-{
-	int ret = 0;
-
-	if (!drvdata->csdev->enable)
-		return -EPERM;
-
-	switch (drvdata->config_type) {
-	case TMC_CONFIG_TYPE_ETB:
-	case TMC_CONFIG_TYPE_ETF:
-		ret = tmc_read_unprepare_etb(drvdata);
-		break;
-	case TMC_CONFIG_TYPE_ETR:
-		ret = tmc_read_unprepare_etr(drvdata);
-		break;
+{drivers/hwtracing/coresight/coresight-tmc.c
 	default:
 		ret = -EINVAL;
 	}
@@ -840,10 +827,11 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 		mutex_init(&drvdata->idr_mutex);
 
 		if (of_property_read_bool(drvdata->dev->of_node,
-			"qcom,qdss-ipa-support"))
+			"qcom,qdss-ipa-support")) {
 			ret = tmc_etr_ipa_init(adev, drvdata);
 			if (ret)
 				goto out_iommu_deinit;
+			}
 		break;
 	case TMC_CONFIG_TYPE_ETF:
 		desc.type = CORESIGHT_DEV_TYPE_LINKSINK;
