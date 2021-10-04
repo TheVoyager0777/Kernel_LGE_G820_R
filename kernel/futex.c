@@ -719,7 +719,7 @@ again:
 
 		key->both.offset |= FUT_OFF_INODE; /* inode-based key */
 		key->shared.i_seq = get_inode_sequence_number(inode);
-		key->shared.pgoff = page_to_pgoff(tail);
+		key->shared.pgoff = basepage_index(tail);
 		rcu_read_unlock();
 	}
 
@@ -884,12 +884,17 @@ static void put_pi_state(struct futex_pi_state *pi_state)
 	 * and has cleaned up the pi_state already
 	 */
 	if (pi_state->owner) {
-		unsigned long flags;
+		struct task_struct *owner;
 
-		raw_spin_lock_irqsave(&pi_state->pi_mutex.wait_lock, flags);
-		pi_state_update_owner(pi_state, NULL);
-		rt_mutex_proxy_unlock(&pi_state->pi_mutex);
-		raw_spin_unlock_irqrestore(&pi_state->pi_mutex.wait_lock, flags);
+		raw_spin_lock_irq(&pi_state->pi_mutex.wait_lock);
+		owner = pi_state->owner;
+		if (owner) {
+			raw_spin_lock(&owner->pi_lock);
+			list_del_init(&pi_state->list);
+			raw_spin_unlock(&owner->pi_lock);
+		}
+		rt_mutex_proxy_unlock(&pi_state->pi_mutex, owner);
+		raw_spin_unlock_irq(&pi_state->pi_mutex.wait_lock);
 	}
 
 	if (current->pi_state_cache) {
@@ -1614,10 +1619,8 @@ static int wake_futex_pi(u32 __user *uaddr, u32 uval, struct futex_pi_state *pi_
 	 */
 	newval = FUTEX_WAITERS | task_pid_vnr(new_owner);
 
-	if (unlikely(should_fail_futex(true))) {
+	if (unlikely(should_fail_futex(true)))
 		ret = -EFAULT;
-		goto out_unlock;
-	}
 
 	ret = cmpxchg_futex_value_locked(&curval, uaddr, uval, newval);
 	if (!ret && (curval != uval)) {
@@ -1732,8 +1735,8 @@ static int futex_atomic_op_inuser(unsigned int encoded_op, u32 __user *uaddr)
 {
 	unsigned int op =	  (encoded_op & 0x70000000) >> 28;
 	unsigned int cmp =	  (encoded_op & 0x0f000000) >> 24;
-	int oparg = sign_extend32((encoded_op & 0x00fff000) >> 12, 11);
-	int cmparg = sign_extend32(encoded_op & 0x00000fff, 11);
+	int oparg = sign_extend32((encoded_op & 0x00fff000) >> 12, 12);
+	int cmparg = sign_extend32(encoded_op & 0x00000fff, 12);
 	int oldval, ret;
 
 	if (encoded_op & (FUTEX_OP_OPARG_SHIFT << 28)) {
@@ -2513,22 +2516,10 @@ retry:
 		}
 
 		/*
-		 * The trylock just failed, so either there is an owner or
-		 * there is a higher priority waiter than this one.
+		 * Since we just failed the trylock; there must be an owner.
 		 */
 		newowner = rt_mutex_owner(&pi_state->pi_mutex);
-		/*
-		 * If the higher priority waiter has not yet taken over the
-		 * rtmutex then newowner is NULL. We can't return here with
-		 * that state because it's inconsistent vs. the user space
-		 * state. So drop the locks and try again. It's a valid
-		 * situation and not any different from the other retry
-		 * conditions.
-		 */
-		if (unlikely(!newowner)) {
-			err = -EAGAIN;
-			goto handle_err;
-		}
+		BUG_ON(!newowner);
 	} else {
 		WARN_ON_ONCE(argowner != current);
 		if (oldowner == current) {
@@ -2875,13 +2866,14 @@ retry:
 		goto out;
 
 	restart = &current->restart_block;
+	restart->fn = futex_wait_restart;
 	restart->futex.uaddr = uaddr;
 	restart->futex.val = val;
 	restart->futex.time = *abs_time;
 	restart->futex.bitset = bitset;
 	restart->futex.flags = flags | FLAGS_HAS_TIMEOUT;
 
-	ret = set_restart_fn(restart, futex_wait_restart);
+	ret = -ERESTART_RESTARTBLOCK;
 
 out:
 	if (to) {
@@ -3885,7 +3877,8 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 
 	if (op & FUTEX_CLOCK_REALTIME) {
 		flags |= FLAGS_CLOCKRT;
-		if (cmd != FUTEX_WAIT_BITSET &&	cmd != FUTEX_WAIT_REQUEUE_PI)
+		if (cmd != FUTEX_WAIT && cmd != FUTEX_WAIT_BITSET && \
+		    cmd != FUTEX_WAIT_REQUEUE_PI)
 			return -ENOSYS;
 	}
 

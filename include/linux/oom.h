@@ -45,7 +45,6 @@ struct oom_control {
 };
 
 extern struct mutex oom_lock;
-extern struct mutex oom_adj_mutex;
 
 static inline void set_current_oom_origin(void)
 {
@@ -64,11 +63,7 @@ static inline bool oom_task_origin(const struct task_struct *p)
 
 static inline bool tsk_is_oom_victim(struct task_struct * tsk)
 {
-#ifdef CONFIG_ANDROID_SIMPLE_LMK
-	return test_ti_thread_flag(task_thread_info(tsk), TIF_MEMDIE);
-#else
 	return tsk->signal->oom_mm;
-#endif
 }
 
 /*

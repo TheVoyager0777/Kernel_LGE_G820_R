@@ -13,8 +13,6 @@ extern int msm_cdc_pinctrl_select_sleep_state(struct device_node *np);
 extern int msm_cdc_pinctrl_select_active_state(struct device_node *np);
 extern int msm_cdc_pinctrl_get_state(struct device_node *np);
 extern int msm_cdc_get_gpio_state(struct device_node *np);
-extern int msm_cdc_pinctrl_set_wakeup_capable(struct device_node *np,
-					      bool enable);
 int msm_cdc_pinctrl_drv_init(void);
 void msm_cdc_pinctrl_drv_exit(void);
 
@@ -41,11 +39,6 @@ void msm_cdc_pinctrl_drv_exit(void)
 int msm_cdc_pinctrl_get_state(struct device_node *np)
 {
 	return true;
-}
-static int msm_cdc_pinctrl_set_wakeup_capable(struct device_node *np,
-					      bool enable)
-{
-	return 0;
 }
 #endif
 

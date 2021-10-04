@@ -1361,235 +1361,6 @@ static void mmc_update_bkops_start(struct mmc_bkops_stats *stats)
 	spin_unlock_irq(&stats->lock);
 }
 
-	trace_mmc_request_start(host, mrq);
-
-	if (host->cqe_on)
-		host->cqe_ops->cqe_off(host);
-
-	host->ops->request(host, mrq);
-}
-
-static void mmc_mrq_pr_debug(struct mmc_host *host, struct mmc_request *mrq)
-{
-	if (mrq->sbc) {
-		pr_debug("<%s: starting CMD%u arg %08x flags %08x>\n",
-			 mmc_hostname(host), mrq->sbc->opcode,
-			 mrq->sbc->arg, mrq->sbc->flags);
-	}
-
-	if (mrq->cmd) {
-		pr_debug("%s: starting CMD%u arg %08x flags %08x\n",
-			 mmc_hostname(host), mrq->cmd->opcode, mrq->cmd->arg,
-			 mrq->cmd->flags);
-	}
-
-	if (mrq->data) {
-		pr_debug("%s: blksz %d blocks %d flags %08x tsac %d ms nsac %d\n",
-			mmc_hostname(host), mrq->data->blksz,
-			mrq->data->blocks, mrq->data->flags,
-			mrq->data->timeout_ns / 1000000,
-			mrq->data->timeout_clks);
-	}
-
-	if (mrq->stop) {
-		pr_debug("%s:     CMD%u arg %08x flags %08x\n",
-			 mmc_hostname(host), mrq->stop->opcode,
-			 mrq->stop->arg, mrq->stop->flags);
-	}
-}
-
-static int mmc_mrq_prep(struct mmc_host *host, struct mmc_request *mrq)
-{
-	unsigned int i, sz = 0;
-	struct scatterlist *sg;
-
-	if (mrq->cmd) {
-		mrq->cmd->error = 0;
-		mrq->cmd->mrq = mrq;
-		mrq->cmd->data = mrq->data;
-	}
-	if (mrq->sbc) {
-		mrq->sbc->error = 0;
-		mrq->sbc->mrq = mrq;
-	}
-	if (mrq->data) {
-		if (mrq->data->blksz > host->max_blk_size ||
-		    mrq->data->blocks > host->max_blk_count ||
-		    mrq->data->blocks * mrq->data->blksz > host->max_req_size)
-			return -EINVAL;
-
-		for_each_sg(mrq->data->sg, sg, mrq->data->sg_len, i)
-			sz += sg->length;
-		if (sz != mrq->data->blocks * mrq->data->blksz)
-			return -EINVAL;
-
-		mrq->data->error = 0;
-		mrq->data->mrq = mrq;
-		if (mrq->stop) {
-			mrq->data->stop = mrq->stop;
-			mrq->stop->error = 0;
-			mrq->stop->mrq = mrq;
-		}
-#ifdef CONFIG_MMC_PERF_PROFILING
-		if (host->perf_enable)
-			host->perf.start = ktime_get();
-#endif
-	}
-
-	return 0;
-}
-
-static int mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
-{
-	int err;
-
-	mmc_retune_hold(host);
-
-	if (mmc_card_removed(host->card))
-		return -ENOMEDIUM;
-
-	mmc_mrq_pr_debug(host, mrq);
-
-	WARN_ON(!host->claimed);
-
-	err = mmc_mrq_prep(host, mrq);
-	if (err)
-		return err;
-
-	mmc_host_clk_hold(host);
-	led_trigger_event(host->led, LED_FULL);
-
-	if (mmc_is_data_request(mrq)) {
-		mmc_deferred_scaling(host);
-		mmc_clk_scaling_start_busy(host, true);
-	}
-
-	__mmc_start_request(host, mrq);
-
-	return 0;
-}
-
-static int mmc_cmdq_check_retune(struct mmc_host *host)
-{
-	bool cmdq_mode;
-	int err = 0;
-
-	if (!host->need_retune || host->doing_retune || !host->card ||
-			mmc_card_hs400es(host->card) ||
-			(host->ios.clock <= MMC_HIGH_DDR_MAX_DTR))
-		return 0;
-
-	cmdq_mode = mmc_card_cmdq(host->card);
-	if (cmdq_mode) {
-		err = mmc_cmdq_halt(host, true);
-		if (err) {
-			pr_err("%s: %s: failed halting queue (%d)\n",
-				mmc_hostname(host), __func__, err);
-			host->cmdq_ops->dumpstate(host);
-			goto halt_failed;
-		}
-	}
-
-	mmc_retune_hold(host);
-	err = mmc_retune(host);
-	mmc_retune_release(host);
-
-	if (cmdq_mode) {
-		if (mmc_cmdq_halt(host, false)) {
-			pr_err("%s: %s: cmdq unhalt failed\n",
-			mmc_hostname(host), __func__);
-			host->cmdq_ops->dumpstate(host);
-		}
-	}
-
-halt_failed:
-	pr_debug("%s: %s: Retuning done err: %d\n",
-				mmc_hostname(host), __func__, err);
-
-	return err;
-}
-
-static int mmc_start_cmdq_request(struct mmc_host *host,
-				   struct mmc_request *mrq)
-{
-	int ret = 0;
-
-	if (mrq->data) {
-		pr_debug("%s: blksz %d blocks %d flags %08x tsac %lu ms nsac %d\n",
-			mmc_hostname(host), mrq->data->blksz,
-			mrq->data->blocks, mrq->data->flags,
-			mrq->data->timeout_ns / NSEC_PER_MSEC,
-			mrq->data->timeout_clks);
-
-		BUG_ON(mrq->data->blksz > host->max_blk_size);
-		BUG_ON(mrq->data->blocks > host->max_blk_count);
-		BUG_ON(mrq->data->blocks * mrq->data->blksz >
-			host->max_req_size);
-		mrq->data->error = 0;
-		mrq->data->mrq = mrq;
-	}
-
-	if (mrq->cmd) {
-		mrq->cmd->error = 0;
-		mrq->cmd->mrq = mrq;
-	}
-
-	mmc_host_clk_hold(host);
-	mmc_cmdq_check_retune(host);
-	if (likely(host->cmdq_ops->request)) {
-		ret = host->cmdq_ops->request(host, mrq);
-	} else {
-		ret = -ENOENT;
-		pr_err("%s: %s: cmdq request host op is not available\n",
-			mmc_hostname(host), __func__);
-	}
-
-	if (ret) {
-		mmc_host_clk_release(host);
-		pr_err("%s: %s: issue request failed, err=%d\n",
-			mmc_hostname(host), __func__, ret);
-	}
-
-	return ret;
-}
-
-/**
- *	mmc_blk_init_bkops_statistics - initialize bkops statistics
- *	@card: MMC card to start BKOPS
- *
- *	Initialize and enable the bkops statistics
- */
-void mmc_blk_init_bkops_statistics(struct mmc_card *card)
-{
-	int i;
-	struct mmc_bkops_stats *stats;
-
-	if (!card)
-		return;
-
-	stats = &card->bkops.stats;
-	spin_lock(&stats->lock);
-
-	stats->manual_start = 0;
-	stats->hpi = 0;
-	stats->auto_start = 0;
-	stats->auto_stop = 0;
-	for (i = 0 ; i < MMC_BKOPS_NUM_SEVERITY_LEVELS ; i++)
-		stats->level[i] = 0;
-	stats->enabled = true;
-
-	spin_unlock(&stats->lock);
-}
-EXPORT_SYMBOL(mmc_blk_init_bkops_statistics);
-
-static void mmc_update_bkops_start(struct mmc_bkops_stats *stats)
-{
-	spin_lock_irq(&stats->lock);
-	if (stats->enabled)
-		stats->manual_start++;
-	spin_unlock_irq(&stats->lock);
-}
-
 static void mmc_update_bkops_auto_on(struct mmc_bkops_stats *stats)
 {
 	spin_lock_irq(&stats->lock);
@@ -2690,14 +2461,11 @@ int mmc_execute_tuning(struct mmc_card *card)
 	err = host->ops->execute_tuning(host, opcode);
 	mmc_host_clk_release(host);
 
-	if (err) {
+	if (err)
 		pr_err("%s: tuning execution failed: %d\n",
 			mmc_hostname(host), err);
-	} else {
-		host->retune_now = 0;
-		host->need_retune = 0;
+	else
 		mmc_retune_enable(host);
-	}
 
 	return err;
 }
@@ -3219,7 +2987,7 @@ int mmc_set_uhs_voltage(struct mmc_host *host, u32 ocr)
 	mmc_host_clk_hold(host);
 	err = mmc_wait_for_cmd(host, &cmd, 0);
 	if (err)
-		goto power_cycle;
+		goto err_command;
 
 	if (!mmc_host_is_spi(host) && (cmd.resp[0] & R1_ERROR)) {
 		err = -EIO;

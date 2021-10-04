@@ -631,9 +631,8 @@ int a2v_seq_write(u8* data, u32 size)
 #endif
     int ret;
 
-    if(is_immersion_haptic_on) {
+    if(is_immersion_haptic_on)
         return -1;
-    }
 
 	ret = I2CWrite(DW7800_DATA, size, data);
 
@@ -645,9 +644,8 @@ unsigned char a2v_byte_read(u8 addr)
 {
     unsigned char reg_val;
 
-    if(is_immersion_haptic_on) {
+    if(is_immersion_haptic_on)
         return -1;
-    }
 
     i2c_recv_buf(dw7800.i2c, addr, &reg_val, 1);
 

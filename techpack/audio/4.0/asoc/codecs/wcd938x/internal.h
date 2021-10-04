@@ -70,7 +70,6 @@ struct wcd938x_priv {
 	bool comp1_enable;
 	bool comp2_enable;
 	bool ldoh;
-	bool bcs_dis;
 	struct irq_domain *virq;
 	struct wcd_irq_info irq_info;
 	u32 rx_clk_cnt;
@@ -100,7 +99,6 @@ struct wcd938x_priv {
 	struct snd_info_entry *variant_entry;
 	int flyback_cur_det_disable;
 	int ear_rx_path;
-	bool dev_up;
 };
 
 struct wcd938x_micbias_setting {
@@ -150,7 +148,6 @@ enum {
 	WCD_BOLERO_EVT_IMPED_TRUE,	/* for imped true */
 	WCD_BOLERO_EVT_IMPED_FALSE,	/* for imped false */
 	WCD_BOLERO_EVT_RX_COMPANDER_SOFT_RST,
-	WCD_BOLERO_EVT_BCS_CLK_OFF,
 };
 
 enum {
@@ -184,9 +181,6 @@ enum {
 
 extern struct wcd938x_mbhc *wcd938x_soc_get_mbhc(
 				struct snd_soc_codec *codec);
-extern void wcd938x_disable_bcs_before_slow_insert(
-				struct snd_soc_codec *codec,
-				bool bcs_disable);
 extern int wcd938x_mbhc_micb_adjust_voltage(struct snd_soc_codec *codec,
 					int volt, int micb_num);
 extern int wcd938x_get_micb_vout_ctl_val(u32 micb_mv);
