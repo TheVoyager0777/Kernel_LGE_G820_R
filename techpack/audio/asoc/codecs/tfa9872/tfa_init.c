@@ -98,7 +98,7 @@ static enum tfa98xx_error tfa9896_specific(tfa98xx_handle_t handle)
         unsigned short check_value;
 
         if (!tfa98xx_handle_is_open(handle))
-                return TFA98XX_ERROR_NOT_OPEN;
+            return TFA98XX_ERROR_NOT_OPEN;
 
         /* all i2C registers must already set to default POR value */
 
