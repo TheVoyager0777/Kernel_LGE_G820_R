@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -40,6 +40,8 @@
 #define ADC_MODE_VAL_ULP1     0x09
 #define ADC_MODE_VAL_ULP2     0x0B
 
+#define NUM_ATTEMPTS 5
+
 enum {
 	CODEC_TX = 0,
 	CODEC_RX,
@@ -64,6 +66,16 @@ enum {
 	ADC_MODE_LP,
 	ADC_MODE_ULP1,
 	ADC_MODE_ULP2,
+};
+
+static u8 tx_mode_bit[] = {
+	[ADC_MODE_INVALID] = 0x00,
+	[ADC_MODE_HIFI] = 0x01,
+	[ADC_MODE_LO_HIF] = 0x02,
+	[ADC_MODE_NORMAL] = 0x04,
+	[ADC_MODE_LP] = 0x08,
+	[ADC_MODE_ULP1] = 0x10,
+	[ADC_MODE_ULP2] = 0x20,
 };
 
 static const DECLARE_TLV_DB_SCALE(line_gain, 0, 7, 1);
@@ -138,31 +150,63 @@ static int wcd938x_swr_slv_get_current_bank(struct swr_device *dev, u8 devnum)
 	return ((bank & 0x40) ? 1: 0);
 }
 
-static int wcd938x_swr_slv_set_host_clk_div2(struct swr_device *dev,
-						u8 devnum, int bank)
+static int wcd938x_get_clk_rate(int mode)
 {
-	u8 val = (bank ? 1 : 0);
+	int rate;
 
-	return (swr_write(dev, devnum,
-		(SWR_SCP_HOST_CLK_DIV2_CTL_BANK + (0x10 * bank)), &val));
+	switch (mode) {
+	case ADC_MODE_ULP2:
+		rate = SWR_CLK_RATE_0P6MHZ;
+		break;
+	case ADC_MODE_ULP1:
+		rate = SWR_CLK_RATE_1P2MHZ;
+		break;
+	case ADC_MODE_LP:
+		rate = SWR_CLK_RATE_4P8MHZ;
+		break;
+	case ADC_MODE_NORMAL:
+	case ADC_MODE_LO_HIF:
+	case ADC_MODE_HIFI:
+	case ADC_MODE_INVALID:
+	default:
+		rate = SWR_CLK_RATE_9P6MHZ;
+		break;
+	}
+
+	return rate;
 }
 
 static int wcd938x_set_swr_clk_rate(struct snd_soc_codec *codec,
-					int mode, int bank)
+					int rate, int bank)
 {
 	u8 mask = (bank ? 0xF0 : 0x0F);
 	u8 val = 0;
 
-	if ((mode == ADC_MODE_ULP1) || (mode == ADC_MODE_ULP2))
+	switch (rate) {
+	case SWR_CLK_RATE_0P6MHZ:
 		val = (bank ? 0x60 : 0x06);
-	else
+		break;
+	case SWR_CLK_RATE_1P2MHZ:
+		val = (bank ? 0x50 : 0x05);
+		break;
+	case SWR_CLK_RATE_2P4MHZ:
+		val = (bank ? 0x30 : 0x03);
+		break;
+	case SWR_CLK_RATE_4P8MHZ:
+		val = (bank ? 0x10 : 0x01);
+		break;
+	case SWR_CLK_RATE_9P6MHZ:
+	default:
 		val = 0x00;
-
-	snd_soc_update_bits(codec, WCD938X_DIGITAL_SWR_TX_CLK_RATE,
+		break;
+	}
+	snd_soc_update_bits(codec,
+				      WCD938X_DIGITAL_SWR_TX_CLK_RATE,
 				      mask, val);
 
 	return 0;
 }
+
 static int wcd938x_init_reg(struct snd_soc_codec *codec)
 {
 	snd_soc_update_bits(codec, WCD938X_SLEEP_CTL, 0x0E, 0x0E);
@@ -180,6 +224,7 @@ static int wcd938x_init_reg(struct snd_soc_codec *codec)
 	snd_soc_update_bits(codec, WCD938X_ANA_BIAS, 0x40, 0x40);
 	/* 10 msec delay as per HW requirement */
 	usleep_range(10000, 10010);
+	snd_soc_update_bits(codec, WCD938X_ANA_BIAS, 0x40, 0x00);
 	snd_soc_update_bits(codec,
 				      WCD938X_HPH_NEW_INT_RDAC_GAIN_CTL,
 				      0xF0, 0x00);
@@ -199,7 +244,6 @@ static int wcd938x_init_reg(struct snd_soc_codec *codec)
 	snd_soc_update_bits(codec,
 				WCD938X_TX_COM_NEW_INT_TXFE_ICTRL_STG2MAIN_ULP,
 				0x1F, 0x08);
-
 	snd_soc_update_bits(codec,
 				WCD938X_DIGITAL_TX_REQ_FB_CTL_0, 0xFF, 0x55);
 	snd_soc_update_bits(codec,
@@ -218,6 +262,13 @@ static int wcd938x_init_reg(struct snd_soc_codec *codec)
 				WCD938X_MICB3_TEST_CTL_1, 0xE0, 0xE0);
 	snd_soc_update_bits(codec,
 				WCD938X_MICB4_TEST_CTL_1, 0xE0, 0xE0);
+	snd_soc_update_bits(codec,
+				WCD938X_TX_3_4_TEST_BLK_EN2, 0x01, 0x00);
+	snd_soc_update_bits(codec, WCD938X_SLEEP_CTL, 0x0E,
+				((snd_soc_read(codec,
+				WCD938X_DIGITAL_EFUSE_REG_30) & 0x07) << 1));
+	snd_soc_update_bits(codec,
+				WCD938X_HPH_SURGE_HPHLR_SURGE_EN, 0xC0, 0xC0);
 
 	return 0;
 }
@@ -347,7 +398,8 @@ err_port_map:
 }
 
 static int wcd938x_tx_connect_port(struct snd_soc_codec *codec,
-					u8 slv_port_type, u8 enable)
+					u8 slv_port_type, int clk_rate,
+					u8 enable)
 {
 	struct wcd938x_priv *wcd938x = snd_soc_codec_get_drvdata(codec);
 	u8 port_id, num_ch, ch_mask, port_type;
@@ -358,6 +410,8 @@ static int wcd938x_tx_connect_port(struct snd_soc_codec *codec,
 	ret = wcd938x_set_port_params(codec, slv_port_type, &port_id,
 				&num_ch, &ch_mask, &ch_rate,
 				&port_type, CODEC_TX);
+	if (clk_rate)
+		ch_rate = clk_rate;
 
 	if (ret)
 		return ret;
@@ -621,6 +675,15 @@ static int wcd938x_codec_ear_dac_event(struct snd_soc_dapm_widget *w,
 		if (wcd938x->ear_rx_path & EAR_RX_PATH_AUX) {
 			snd_soc_update_bits(codec,
 				WCD938X_DIGITAL_CDC_AUX_GAIN_CTL, 0x01, 0x00);
+			snd_soc_update_bits(codec,
+				WCD938X_DIGITAL_CDC_DIG_CLK_CTL, 0x04, 0x00);
+		} else {
+			snd_soc_update_bits(codec,
+				WCD938X_DIGITAL_CDC_HPH_GAIN_CTL, 0x04, 0x00);
+			snd_soc_update_bits(codec,
+				WCD938X_DIGITAL_CDC_DIG_CLK_CTL, 0x01, 0x00);
+			snd_soc_update_bits(codec,
+				WCD938X_DIGITAL_CDC_COMP_CTL_0, 0x02, 0x00);
 		}
 		snd_soc_update_bits(codec,
 				WCD938X_ANA_EAR_COMPANDER_CTL, 0x80, 0x00);
@@ -1016,6 +1079,9 @@ static int wcd938x_codec_enable_ear_pa(struct snd_soc_dapm_widget *w,
 			snd_soc_update_bits(codec,
 					WCD938X_DIGITAL_PDM_WD_CTL0,
 					0x17, 0x13);
+		if (!wcd938x->comp1_enable)
+			snd_soc_update_bits(codec,
+				WCD938X_ANA_EAR_COMPANDER_CTL, 0x80, 0x80);
 		break;
 	case SND_SOC_DAPM_POST_PMU:
 		/* 6 msec delay as per HW requirement */
@@ -1042,18 +1108,26 @@ static int wcd938x_codec_enable_ear_pa(struct snd_soc_dapm_widget *w,
 		}
 		break;
 	case SND_SOC_DAPM_PRE_PMD:
-		if (wcd938x->ear_rx_path & EAR_RX_PATH_AUX)
+		if (wcd938x->ear_rx_path & EAR_RX_PATH_AUX) {
 			wcd_disable_irq(&wcd938x->irq_info,
 					WCD938X_IRQ_AUX_PDM_WD_INT);
-		else
+			if (wcd938x->update_wcd_event)
+				wcd938x->update_wcd_event(wcd938x->handle,
+						WCD_BOLERO_EVT_RX_MUTE,
+						(WCD_RX3 << 0x10 | 0x1));
+		} else {
 			wcd_disable_irq(&wcd938x->irq_info,
 					WCD938X_IRQ_HPHL_PDM_WD_INT);
 		if (wcd938x->update_wcd_event)
 			wcd938x->update_wcd_event(wcd938x->handle,
 						WCD_BOLERO_EVT_RX_MUTE,
 						(WCD_RX1 << 0x10 | 0x1));
+		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
+		if (!wcd938x->comp1_enable)
+			snd_soc_update_bits(codec,
+				WCD938X_ANA_EAR_COMPANDER_CTL, 0x80, 0x00);
 		/* 7 msec delay as per HW requirement */
 		usleep_range(7000, 7010);
 		if (wcd938x->ear_rx_path & EAR_RX_PATH_AUX)
@@ -1275,10 +1349,12 @@ static int wcd938x_codec_enable_dmic(struct snd_soc_dapm_widget *w,
 		/* enable clock scaling */
 		snd_soc_update_bits(codec,
 				WCD938X_DIGITAL_CDC_DMIC_CTL, 0x06, 0x06);
-		wcd938x_tx_connect_port(codec, DMIC0 + (w->shift), true);
+		wcd938x_tx_connect_port(codec, DMIC0 + (w->shift),
+					SWR_CLK_RATE_2P4MHZ, true);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
-		wcd938x_tx_connect_port(codec, DMIC0 + (w->shift), false);
+		wcd938x_tx_connect_port(codec, DMIC0 + (w->shift), 0,
+					false);
 		snd_soc_update_bits(codec,
 				WCD938X_DIGITAL_CDC_AMIC_CTL,
 				(0x01 << dmic_ctl_shift),
@@ -1399,32 +1475,54 @@ static int wcd938x_tx_swr_ctrl(struct snd_soc_dapm_widget *w,
 	struct wcd938x_priv *wcd938x = snd_soc_codec_get_drvdata(codec);
 	int ret = 0;
 	int bank = 0;
-	int mode = 0;
+	u8 mode = 0;
+	int i = 0;
+	int rate = 0;
 
-	bank = wcd938x_swr_slv_get_current_bank(wcd938x->tx_swr_dev,
-						wcd938x->tx_swr_dev->dev_num);
-	wcd938x_swr_slv_set_host_clk_div2(wcd938x->tx_swr_dev,
-					  wcd938x->tx_swr_dev->dev_num, bank);
+	bank = (wcd938x_swr_slv_get_current_bank(wcd938x->tx_swr_dev,
+					wcd938x->tx_swr_dev->dev_num) ? 0 : 1);
+
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
+		if (strnstr(w->name, "ADC", sizeof("ADC"))) {
+			if (test_bit(WCD_ADC1, &wcd938x->status_mask))
+				mode |= tx_mode_bit[wcd938x->tx_mode[WCD_ADC1]];
+			if (test_bit(WCD_ADC2, &wcd938x->status_mask))
+				mode |= tx_mode_bit[wcd938x->tx_mode[WCD_ADC2]];
+			if (test_bit(WCD_ADC3, &wcd938x->status_mask))
+				mode |= tx_mode_bit[wcd938x->tx_mode[WCD_ADC3]];
+			if (test_bit(WCD_ADC4, &wcd938x->status_mask))
+				mode |= tx_mode_bit[wcd938x->tx_mode[WCD_ADC4]];
+
+			if (mode != 0) {
+				for (i = 0; i < ADC_MODE_ULP2; i++) {
+					if (mode & (1 << i)) {
+						i++;
+						break;
+					}
+				}
+			}
+			rate = wcd938x_get_clk_rate(i);
+		wcd938x_set_swr_clk_rate(codec, mode, bank);
+		}
 		ret = swr_slvdev_datapath_control(wcd938x->tx_swr_dev,
 		    wcd938x->tx_swr_dev->dev_num,
 		    true);
-		if (test_bit(WCD_ADC1, &wcd938x->status_mask))
-			mode |= wcd938x->tx_mode[WCD_ADC1];
-		if (test_bit(WCD_ADC2, &wcd938x->status_mask))
-			mode |= wcd938x->tx_mode[WCD_ADC2];
-		if (test_bit(WCD_ADC3, &wcd938x->status_mask))
-			mode |= wcd938x->tx_mode[WCD_ADC3];
-		if (test_bit(WCD_ADC4, &wcd938x->status_mask))
-			mode |= wcd938x->tx_mode[WCD_ADC4];
-		wcd938x_set_swr_clk_rate(codec, mode, bank);
+		if (strnstr(w->name, "ADC", sizeof("ADC"))) {
+			/* Copy clk settings to active bank */
+			wcd938x_set_swr_clk_rate(codec, rate, !bank);
+		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
+		if (strnstr(w->name, "ADC", sizeof("ADC"))) {
+			rate = wcd938x_get_clk_rate(ADC_MODE_INVALID);
+			wcd938x_set_swr_clk_rate(codec, rate, !bank);
+		}
 		ret = swr_slvdev_datapath_control(wcd938x->tx_swr_dev,
 		    wcd938x->tx_swr_dev->dev_num,
 		    false);
-		wcd938x_set_swr_clk_rate(codec, ADC_MODE_INVALID, bank);
+		if (strnstr(w->name, "ADC", sizeof("ADC")))
+			wcd938x_set_swr_clk_rate(codec, rate, bank);
 		break;
 	};
 
@@ -1471,6 +1569,7 @@ static int wcd938x_codec_enable_adc(struct snd_soc_dapm_widget *w,
 	struct snd_soc_codec *codec =
 					snd_soc_dapm_to_codec(w->dapm);
 	struct wcd938x_priv *wcd938x = snd_soc_codec_get_drvdata(codec);
+	int clk_rate = 0;
 
 	dev_dbg(codec->dev, "%s wname: %s event: %d\n", __func__,
 		w->name, event);
@@ -1481,21 +1580,26 @@ static int wcd938x_codec_enable_adc(struct snd_soc_dapm_widget *w,
 				WCD938X_DIGITAL_CDC_ANA_CLK_CTL, 0x08, 0x08);
 		snd_soc_update_bits(codec,
 				WCD938X_DIGITAL_CDC_ANA_CLK_CTL, 0x10, 0x10);
-
 		set_bit(w->shift, &wcd938x->status_mask);
-				/* Enable BCS for Headset mic */
+		clk_rate = wcd938x_get_clk_rate(wcd938x->tx_mode[w->shift]);
+		/* Enable BCS for Headset mic */
 		if (w->shift == 1 && !(snd_soc_read(codec,
 				WCD938X_TX_NEW_AMIC_MUX_CFG) & 0x80)) {
-			wcd938x_tx_connect_port(codec, MBHC, true);
+			if (!wcd938x->bcs_dis)
+				wcd938x_tx_connect_port(codec, MBHC,
+						SWR_CLK_RATE_4P8MHZ, true);
 			set_bit(AMIC2_BCS_ENABLE, &wcd938x->status_mask);
 		}
-		wcd938x_tx_connect_port(codec, ADC1 + (w->shift), true);
+		wcd938x_tx_connect_port(codec, ADC1 + (w->shift), clk_rate,
+					true);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
-		wcd938x_tx_connect_port(codec, ADC1 + (w->shift), false);
+		wcd938x_tx_connect_port(codec, ADC1 + (w->shift), 0, false);
 		if (w->shift == 1 &&
 			test_bit(AMIC2_BCS_ENABLE, &wcd938x->status_mask)) {
-			wcd938x_tx_connect_port(codec, MBHC, false);
+			if (!wcd938x->bcs_dis)
+				wcd938x_tx_connect_port(codec, MBHC, 0,
+							false);
 			clear_bit(AMIC2_BCS_ENABLE, &wcd938x->status_mask);
 		}
 		snd_soc_update_bits(codec,
@@ -1505,6 +1609,21 @@ static int wcd938x_codec_enable_adc(struct snd_soc_dapm_widget *w,
 	};
 
 	return 0;
+}
+
+void wcd938x_disable_bcs_before_slow_insert(struct snd_soc_codec *codec,
+					    bool bcs_disable)
+{
+	struct wcd938x_priv *wcd938x = snd_soc_codec_get_drvdata(codec);
+
+	if (wcd938x->update_wcd_event) {
+		if (bcs_disable)
+			wcd938x->update_wcd_event(wcd938x->handle,
+						WCD_BOLERO_EVT_BCS_CLK_OFF, 0);
+		else
+			wcd938x->update_wcd_event(wcd938x->handle,
+						WCD_BOLERO_EVT_BCS_CLK_OFF, 1);
+	}
 }
 
 int wcd938x_tx_channel_config(struct snd_soc_codec *codec,
@@ -1611,17 +1730,29 @@ static int wcd938x_enable_req(struct snd_soc_dapm_widget *w,
 		switch (w->shift) {
 		case 0:
 			snd_soc_update_bits(codec,
+				WCD938X_DIGITAL_CDC_TX_ANA_MODE_0_1, 0x0F,
+				0x00);
+			snd_soc_update_bits(codec,
 				WCD938X_DIGITAL_CDC_DIG_CLK_CTL, 0x10, 0x00);
 			break;
 		case 1:
+			snd_soc_update_bits(codec,
+				WCD938X_DIGITAL_CDC_TX_ANA_MODE_0_1, 0xF0,
+				0x00);
 			snd_soc_update_bits(codec,
 				WCD938X_DIGITAL_CDC_DIG_CLK_CTL, 0x20, 0x00);
 			break;
 		case 2:
 			snd_soc_update_bits(codec,
+				WCD938X_DIGITAL_CDC_TX_ANA_MODE_2_3, 0x0F,
+				0x00);
+			snd_soc_update_bits(codec,
 				WCD938X_DIGITAL_CDC_DIG_CLK_CTL, 0x40, 0x00);
 			break;
 		case 3:
+			snd_soc_update_bits(codec,
+				WCD938X_DIGITAL_CDC_TX_ANA_MODE_2_3, 0xF0,
+				0x00);
 			snd_soc_update_bits(codec,
 				WCD938X_DIGITAL_CDC_DIG_CLK_CTL, 0x80, 0x00);
 			break;
@@ -1645,6 +1776,7 @@ int wcd938x_micbias_control(struct snd_soc_codec *codec,
 	int pre_off_event = 0, post_off_event = 0;
 	int post_on_event = 0, post_dapm_off = 0;
 	int post_dapm_on = 0;
+	int ret = 0;
 
 	if ((micb_index < 0) || (micb_index > WCD938X_MAX_MICBIAS - 1)) {
 		dev_err(codec->dev,
@@ -1686,6 +1818,12 @@ int wcd938x_micbias_control(struct snd_soc_codec *codec,
 
 	switch (req) {
 	case MICB_PULLUP_ENABLE:
+		if (!wcd938x->dev_up) {
+			dev_dbg(codec->dev, "%s: enable req %d wcd device down\n",
+				__func__, req);
+			ret = -ENODEV;
+			goto done;
+		}
 		wcd938x->pullup_ref[micb_index]++;
 		if ((wcd938x->pullup_ref[micb_index] == 1) &&
 		    (wcd938x->micb_ref[micb_index] == 0))
@@ -1695,12 +1833,24 @@ int wcd938x_micbias_control(struct snd_soc_codec *codec,
 	case MICB_PULLUP_DISABLE:
 		if (wcd938x->pullup_ref[micb_index] > 0)
 			wcd938x->pullup_ref[micb_index]--;
+		if (!wcd938x->dev_up) {
+			dev_dbg(codec->dev, "%s: enable req %d wcd device down\n",
+				__func__, req);
+			ret = -ENODEV;
+			goto done;
+		}
 		if ((wcd938x->pullup_ref[micb_index] == 0) &&
 		    (wcd938x->micb_ref[micb_index] == 0))
 			snd_soc_update_bits(codec, micb_reg,
 							0xC0, 0x00);
 		break;
 	case MICB_ENABLE:
+		if (!wcd938x->dev_up) {
+			dev_dbg(codec->dev, "%s: enable req %d wcd device down\n",
+				__func__, req);
+			ret = -ENODEV;
+			goto done;
+		}
 		wcd938x->micb_ref[micb_index]++;
 		if (wcd938x->micb_ref[micb_index] == 1) {
 			snd_soc_update_bits(codec,
@@ -1733,6 +1883,12 @@ int wcd938x_micbias_control(struct snd_soc_codec *codec,
 	case MICB_DISABLE:
 		if (wcd938x->micb_ref[micb_index] > 0)
 			wcd938x->micb_ref[micb_index]--;
+		if (!wcd938x->dev_up) {
+			dev_dbg(codec->dev, "%s: enable req %d wcd device down\n",
+				__func__, req);
+			ret = -ENODEV;
+			goto done;
+		}
 		if ((wcd938x->micb_ref[micb_index] == 0) &&
 		    (wcd938x->pullup_ref[micb_index] > 0))
 			snd_soc_update_bits(codec, micb_reg,
@@ -1763,9 +1919,10 @@ int wcd938x_micbias_control(struct snd_soc_codec *codec,
 		"%s: micb_num:%d, micb_ref: %d, pullup_ref: %d\n",
 		__func__, micb_num, wcd938x->micb_ref[micb_index],
 		wcd938x->pullup_ref[micb_index]);
-	mutex_unlock(&wcd938x->micb_lock);
 
-	return 0;
+done:
+	mutex_unlock(&wcd938x->micb_lock);
+	return ret;
 }
 EXPORT_SYMBOL(wcd938x_micbias_control);
 
@@ -1773,15 +1930,18 @@ static int wcd938x_get_logical_addr(struct swr_device *swr_dev)
 {
 	int ret = 0;
 	uint8_t devnum = 0;
+	int num_retry = NUM_ATTEMPTS;
 
-	ret = swr_get_logical_dev_num(swr_dev, swr_dev->addr, &devnum);
-	if (ret) {
-		dev_err(&swr_dev->dev,
-			"%s get devnum %d for dev addr %lx failed\n",
-			__func__, devnum, swr_dev->addr);
-		swr_remove_device(swr_dev);
-		return ret;
-	}
+	do {
+		ret = swr_get_logical_dev_num(swr_dev, swr_dev->addr, &devnum);
+		if (ret) {
+			dev_err(&swr_dev->dev,
+				"%s get devnum %d for dev addr %lx failed\n",
+				__func__, devnum, swr_dev->addr);
+			/* retry after 1ms */
+			usleep_range(1000, 1010);
+		}
+	} while (ret && --num_retry);
 	swr_dev->dev_num = devnum;
 	return 0;
 }
@@ -1828,14 +1988,20 @@ static int wcd938x_event_notify(struct notifier_block *block,
 					0x80, 0x00);
 		break;
 	case BOLERO_WCD_EVT_SSR_DOWN:
+		wcd938x->dev_up = false;
+		wcd938x->mbhc->wcd_mbhc.deinit_in_progress = true;
 		mbhc = &wcd938x->mbhc->wcd_mbhc;
 		wcd938x_mbhc_ssr_down(wcd938x->mbhc, codec);
 		wcd938x_reset_low(wcd938x->dev);
 		break;
 	case BOLERO_WCD_EVT_SSR_UP:
 		wcd938x_reset(wcd938x->dev);
+		/* allow reset to take effect */
+		usleep_range(10000, 10010);
+
 		wcd938x_get_logical_addr(wcd938x->tx_swr_dev);
 		wcd938x_get_logical_addr(wcd938x->rx_swr_dev);
+
 		wcd938x_init_reg(codec);
 		regcache_mark_dirty(wcd938x->regmap);
 		regcache_sync(wcd938x->regmap);
@@ -1848,6 +2014,8 @@ static int wcd938x_event_notify(struct notifier_block *block,
 		} else {
 			wcd938x_mbhc_hs_detect(codec, mbhc->mbhc_cfg);
 		}
+		wcd938x->mbhc->wcd_mbhc.deinit_in_progress = false;
+		wcd938x->dev_up = true;
 		break;
 	case BOLERO_WCD_EVT_CLK_NOTIFY:
 		snd_soc_update_bits(codec,
@@ -2023,8 +2191,6 @@ static int wcd938x_tx_mode_get(struct snd_kcontrol *kcontrol,
 static int wcd938x_tx_mode_put(struct snd_kcontrol *kcontrol,
 				 struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_widget *widget =
-			snd_soc_dapm_kcontrol_widget(kcontrol);
 	struct snd_soc_codec *codec =
 			snd_soc_kcontrol_codec(kcontrol);
 	struct wcd938x_priv *wcd938x = NULL;
@@ -2037,7 +2203,7 @@ static int wcd938x_tx_mode_put(struct snd_kcontrol *kcontrol,
 
 	wcd938x  = snd_soc_codec_get_drvdata(codec);
 
-	if (!widget || !widget->name || !wcd938x)
+	if (!wcd938x)
 		return -EINVAL;
 
 	ret = wcd938x_tx_path_get(kcontrol->id.name, &path);
@@ -2089,6 +2255,48 @@ static int wcd938x_rx_hph_mode_put(struct snd_kcontrol *kcontrol,
 		mode_val = CLS_H_ULP;
 	}
 	wcd938x->hph_mode = mode_val;
+	return 0;
+}
+
+static int wcd938x_ear_pa_gain_get(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	u8 ear_pa_gain = 0;
+	struct snd_soc_codec *codec =
+				snd_soc_kcontrol_codec(kcontrol);
+
+	ear_pa_gain = snd_soc_read(codec,
+				WCD938X_ANA_EAR_COMPANDER_CTL);
+
+	ear_pa_gain = (ear_pa_gain & 0x7C) >> 2;
+
+	ucontrol->value.integer.value[0] = ear_pa_gain;
+
+	dev_dbg(codec->dev, "%s: ear_pa_gain = 0x%x\n", __func__,
+		ear_pa_gain);
+
+	return 0;
+}
+
+static int wcd938x_ear_pa_gain_put(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	u8 ear_pa_gain = 0;
+	struct snd_soc_codec *codec =
+				snd_soc_kcontrol_codec(kcontrol);
+	struct wcd938x_priv *wcd938x = snd_soc_codec_get_drvdata(codec);
+
+	dev_dbg(codec->dev, "%s: ucontrol->value.integer.value[0]  = %ld\n",
+			__func__, ucontrol->value.integer.value[0]);
+
+	ear_pa_gain =  ucontrol->value.integer.value[0] << 2;
+
+	if (!wcd938x->comp1_enable) {
+		snd_soc_update_bits(codec,
+				WCD938X_ANA_EAR_COMPANDER_CTL,
+				0x7C, ear_pa_gain);
+	}
+
 	return 0;
 }
 
@@ -2206,6 +2414,30 @@ static int wcd938x_ldoh_put(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+static int wcd938x_bcs_get(struct snd_kcontrol *kcontrol,
+				 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec =
+				snd_soc_kcontrol_codec(kcontrol);
+	struct wcd938x_priv *wcd938x = snd_soc_codec_get_drvdata(codec);
+
+	ucontrol->value.integer.value[0] = wcd938x->bcs_dis;
+
+	return 0;
+}
+
+static int wcd938x_bcs_put(struct snd_kcontrol *kcontrol,
+				 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec =
+			snd_soc_kcontrol_codec(kcontrol);
+	struct wcd938x_priv *wcd938x = snd_soc_codec_get_drvdata(codec);
+
+	wcd938x->bcs_dis = ucontrol->value.integer.value[0];
+
+	return 0;
+}
+
 static const char * const tx_mode_mux_text_wcd9380[] = {
 	"ADC_INVALID", "ADC_HIFI", "ADC_LO_HIF", "ADC_NORMAL", "ADC_LP",
 };
@@ -2229,9 +2461,20 @@ static const char * const rx_hph_mode_mux_text_wcd9380[] = {
 	"CLS_AB_LOHIFI",
 };
 
+static const char * const wcd938x_ear_pa_gain_text[] = {
+	"G_6_DB", "G_4P5_DB", "G_3_DB", "G_1P5_DB", "G_0_DB",
+	"G_M1P5_DB", "G_M3_DB", "G_M4P5_DB",
+	"G_M6_DB", "G_7P5_DB", "G_M9_DB",
+	"G_M10P5_DB", "G_M12_DB", "G_M13P5_DB",
+	"G_M15_DB", "G_M16P5_DB", "G_M18_DB",
+};
+
 static const struct soc_enum rx_hph_mode_mux_enum_wcd9380 =
 	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(rx_hph_mode_mux_text_wcd9380),
 			    rx_hph_mode_mux_text_wcd9380);
+
+static SOC_ENUM_SINGLE_EXT_DECL(wcd938x_ear_pa_gain_enum,
+				wcd938x_ear_pa_gain_text);
 
 static const char * const rx_hph_mode_mux_text[] = {
 	"CLS_H_INVALID", "CLS_H_HIFI", "CLS_H_LP", "CLS_AB", "CLS_H_LOHIFI",
@@ -2243,6 +2486,9 @@ static const struct soc_enum rx_hph_mode_mux_enum =
 			    rx_hph_mode_mux_text);
 
 static const struct snd_kcontrol_new wcd9380_snd_controls[] = {
+	SOC_ENUM_EXT("EAR PA GAIN", wcd938x_ear_pa_gain_enum,
+		wcd938x_ear_pa_gain_get, wcd938x_ear_pa_gain_put),
+
 	SOC_ENUM_EXT("RX HPH Mode", rx_hph_mode_mux_enum_wcd9380,
 		wcd938x_rx_hph_mode_get, wcd938x_rx_hph_mode_put),
 
@@ -2275,9 +2521,11 @@ static const struct snd_kcontrol_new wcd938x_snd_controls[] = {
 		wcd938x_get_compander, wcd938x_set_compander),
 	SOC_SINGLE_EXT("HPHR_COMP Switch", SND_SOC_NOPM, 1, 1, 0,
 		wcd938x_get_compander, wcd938x_set_compander),
-
 	SOC_SINGLE_EXT("LDOH Enable", SND_SOC_NOPM, 0, 1, 0,
 		wcd938x_ldoh_get, wcd938x_ldoh_put),
+
+	SOC_SINGLE_EXT("ADC2_BCS Disable", SND_SOC_NOPM, 0, 1, 0,
+		wcd938x_bcs_get, wcd938x_bcs_put),
 
 	SOC_SINGLE_TLV("HPHL Volume", WCD938X_HPH_L_EN, 0, 20, 1, line_gain),
 	SOC_SINGLE_TLV("HPHR Volume", WCD938X_HPH_R_EN, 0, 20, 1, line_gain),
@@ -3066,6 +3314,7 @@ static int wcd938x_soc_codec_probe(struct snd_soc_codec *codec)
 			return ret;
 		}
 	}
+	wcd938x->dev_up = true;
 	return ret;
 
 err_hwdep:
@@ -3085,7 +3334,7 @@ static int wcd938x_soc_codec_remove(struct snd_soc_codec *codec)
 		return -EINVAL;
 	}
 	if (wcd938x->register_notifier)
-		return wcd938x->register_notifier(wcd938x->handle,
+		wcd938x->register_notifier(wcd938x->handle,
 						&wcd938x->nblock,
 						false);
 	return 0;

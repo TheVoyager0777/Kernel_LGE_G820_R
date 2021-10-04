@@ -130,7 +130,7 @@ static int msm_loopback_session_mute_put(struct snd_kcontrol *kcontrol,
 		ret = -EINVAL;
 		goto done;
 	}
-
+	mutex_lock(&loopback_session_lock);
 	pr_debug("%s: mute=%d\n", __func__, mute);
 	hfp_tx_mute = mute;
 	for (n = 0; n < LOOPBACK_SESSION_MAX; n++) {
@@ -143,6 +143,7 @@ static int msm_loopback_session_mute_put(struct snd_kcontrol *kcontrol,
 			pr_err("%s: Send mute command failed rc=%d\n",
 				__func__, ret);
 	}
+	mutex_unlock(&loopback_session_lock);
 done:
 	return ret;
 }
@@ -241,7 +242,6 @@ static int msm_pcm_open(struct snd_pcm_substream *substream)
 	struct msm_pcm_loopback *pcm = NULL;
 	int ret = 0;
 	uint16_t bits_per_sample = 16;
-	struct msm_pcm_routing_evt event;
 	struct asm_session_mtmx_strtr_param_window_v2_t asm_mtmx_strtr_window;
 	uint32_t param_id;
 	struct msm_pcm_pdata *pdata;
@@ -263,10 +263,6 @@ static int msm_pcm_open(struct snd_pcm_substream *substream)
 	dev_dbg(rtd->platform->dev, "%s: pcm out open: %d,%d\n", __func__,
 			pcm->instance, substream->stream);
 	if (pcm->instance == 2) {
-		struct snd_soc_pcm_runtime *soc_pcm_rx =
-				pcm->playback_substream->private_data;
-		struct snd_soc_pcm_runtime *soc_pcm_tx =
-				pcm->capture_substream->private_data;
 		if (pcm->audio_client != NULL)
 			stop_pcm(pcm);
 
@@ -298,15 +294,6 @@ static int msm_pcm_open(struct snd_pcm_substream *substream)
 			mutex_unlock(&pcm->lock);
 			return -ENOMEM;
 		}
-		event.event_func = msm_pcm_route_event_handler;
-		event.priv_data = (void *) pcm;
-		msm_pcm_routing_reg_phy_stream(soc_pcm_tx->dai_link->id,
-			pcm->audio_client->perf_mode,
-			pcm->session_id, pcm->capture_substream->stream);
-		msm_pcm_routing_reg_phy_stream_v2(soc_pcm_rx->dai_link->id,
-			pcm->audio_client->perf_mode,
-			pcm->session_id, pcm->playback_substream->stream,
-			event);
 		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 			pcm->playback_substream = substream;
 			ret = pcm_loopback_set_volume(pcm, pcm->volume);
@@ -345,6 +332,8 @@ static void stop_pcm(struct msm_pcm_loopback *pcm)
 
 	if (pcm->audio_client == NULL)
 		return;
+
+	mutex_lock(&loopback_session_lock);
 	q6asm_cmd(pcm->audio_client, CMD_CLOSE);
 
 	if (pcm->playback_substream != NULL) {
@@ -359,6 +348,7 @@ static void stop_pcm(struct msm_pcm_loopback *pcm)
 	}
 	q6asm_audio_client_free(pcm->audio_client);
 	pcm->audio_client = NULL;
+	mutex_unlock(&loopback_session_lock);
 }
 
 static int msm_pcm_close(struct snd_pcm_substream *substream)
@@ -504,23 +494,36 @@ static int msm_pcm_volume_ctl_put(struct snd_kcontrol *kcontrol,
 {
 	int rc = 0;
 	struct snd_pcm_volume *vol = kcontrol->private_data;
-	struct snd_pcm_substream *substream = vol->pcm->streams[0].substream;
+	struct snd_pcm_substream *substream = NULL;
 	struct msm_pcm_loopback *prtd;
 	int volume = ucontrol->value.integer.value[0];
 
+	if (!vol) {
+		pr_err("%s: vol is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	if (!vol->pcm) {
+		pr_err("%s: vol->pcm is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	substream = vol->pcm->streams[0].substream;
 	pr_debug("%s: volume : 0x%x\n", __func__, volume);
 	if ((!substream) || (!substream->runtime)) {
 		pr_err("%s substream or runtime not found\n", __func__);
 		rc = -ENODEV;
 		goto exit;
 	}
+	mutex_lock(&loopback_session_lock);
 	prtd = substream->runtime->private_data;
 	if (!prtd) {
 		rc = -ENODEV;
+		mutex_unlock(&loopback_session_lock);
 		goto exit;
 	}
 	rc = pcm_loopback_set_volume(prtd, volume);
-
+	mutex_unlock(&loopback_session_lock);
 exit:
 	return rc;
 }
@@ -530,23 +533,35 @@ static int msm_pcm_volume_ctl_get(struct snd_kcontrol *kcontrol,
 {
 	int rc = 0;
 	struct snd_pcm_volume *vol = snd_kcontrol_chip(kcontrol);
-	struct snd_pcm_substream *substream =
-		vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
+	struct snd_pcm_substream *substream = NULL;
 	struct msm_pcm_loopback *prtd;
 
 	pr_debug("%s\n", __func__);
+	if (!vol) {
+		pr_err("%s: vol is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	if (!vol->pcm) {
+		pr_err("%s: vol->pcm is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	substream = vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
 	if ((!substream) || (!substream->runtime)) {
 		pr_debug("%s substream or runtime not found\n", __func__);
 		rc = -ENODEV;
 		goto exit;
 	}
+	mutex_lock(&loopback_session_lock);
 	prtd = substream->runtime->private_data;
 	if (!prtd) {
 		rc = -ENODEV;
+		mutex_unlock(&loopback_session_lock);
 		goto exit;
 	}
 	ucontrol->value.integer.value[0] = prtd->volume;
-
+	mutex_unlock(&loopback_session_lock);
 exit:
 	return rc;
 }
@@ -832,11 +847,13 @@ static int msm_pcm_channel_mixer_cfg_ctl_put(struct snd_kcontrol *kcontrol,
 			session_type,
 			chmixer_pspd);
 
+	mutex_lock(&loopback_session_lock);
 	if (chmixer_pspd->enable && substream->runtime) {
 		prtd = substream->runtime->private_data;
 		if (!prtd) {
 			pr_err("%s find invalid prtd fail\n", __func__);
 			ret = -EINVAL;
+			mutex_unlock(&loopback_session_lock);
 			goto done;
 		}
 
@@ -849,7 +866,7 @@ static int msm_pcm_channel_mixer_cfg_ctl_put(struct snd_kcontrol *kcontrol,
 					chmixer_pspd);
 		}
 	}
-
+	mutex_unlock(&loopback_session_lock);
 	if (reset_override_out_ch_map)
 		chmixer_pspd->override_out_ch_map = false;
 	if (reset_override_in_ch_map)
