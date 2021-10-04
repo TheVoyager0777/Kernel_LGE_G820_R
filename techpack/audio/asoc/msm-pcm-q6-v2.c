@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -31,7 +31,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/msm_audio.h>
 
-#ifdef CONFIG_MACH_LGE
+#if defined(CONFIG_MACH_LGE) && !defined(CONFIG_SND_LGE_SM6150)
 #include <soc/qcom/subsystem_restart.h>
 #endif
 
@@ -397,7 +397,7 @@ static int msm_pcm_playback_prepare(struct snd_pcm_substream *substream)
 				APRV2_IDS_SERVICE_ID_ADSP_ASM_V) >=
 				ADSP_ASM_API_VERSION_V2) &&
 					q6core_use_Q6_32ch_support())
-#ifdef CONFIG_MACH_LGE // 24bit ASM patch
+#if defined(CONFIG_MACH_LGE) && !defined(CONFIG_SND_LGE_SM6150) // 24bit ASM patch
 			ret = q6asm_open_write_v5(prtd->audio_client,
 				fmt_type, 24);
 		else
@@ -416,7 +416,7 @@ static int msm_pcm_playback_prepare(struct snd_pcm_substream *substream)
 			__func__, ret);
 			q6asm_audio_client_free(prtd->audio_client);
 			prtd->audio_client = NULL;
-#ifdef CONFIG_MACH_LGE
+#if defined(CONFIG_MACH_LGE) && !defined(CONFIG_SND_LGE_SM6150)
 			if (ret == -ETIMEDOUT || ret == -EALREADY || ret == -ENODATA)
 				subsystem_restart("adsp");
 #endif
@@ -1398,12 +1398,23 @@ static int msm_pcm_volume_ctl_get(struct snd_kcontrol *kcontrol,
 {
 	struct snd_pcm_volume *vol = snd_kcontrol_chip(kcontrol);
 	struct msm_plat_data *pdata = NULL;
-	struct snd_pcm_substream *substream =
-		vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
+	struct snd_pcm_substream *substream = NULL;
 	struct snd_soc_pcm_runtime *soc_prtd = NULL;
 	struct msm_audio *prtd;
 
 	pr_debug("%s\n", __func__);
+	if (!vol) {
+		pr_err("%s: vol is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	if (!vol->pcm) {
+		pr_err("%s: vol->pcm is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	substream = vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
+
 	if (!substream) {
 		pr_err("%s substream not found\n", __func__);
 		return -ENODEV;
@@ -1435,14 +1446,24 @@ static int msm_pcm_volume_ctl_put(struct snd_kcontrol *kcontrol,
 {
 	int rc = 0;
 	struct snd_pcm_volume *vol = snd_kcontrol_chip(kcontrol);
-	struct snd_pcm_substream *substream =
-		vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
+	struct snd_pcm_substream *substream = NULL;
 	struct snd_soc_pcm_runtime *soc_prtd = NULL;
 	struct msm_plat_data *pdata = NULL;
 	struct msm_audio *prtd;
 	int volume = ucontrol->value.integer.value[0];
 
 	pr_debug("%s: volume : 0x%x\n", __func__, volume);
+	if (!vol) {
+		pr_err("%s: vol is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	if (!vol->pcm) {
+		pr_err("%s: vol->pcm is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	substream = vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
 	if (!substream) {
 		pr_err("%s substream not found\n", __func__);
 		return -ENODEV;
@@ -1958,7 +1979,7 @@ static int msm_pcm_path_latency_ctl_get(struct snd_kcontrol *kcontrol,
 		if (rc) {
 			pr_err("%s: get_path_delay failed, ret=%d\n",
 				__func__, rc);
-			mutex_lock(&pdata->lock);
+			mutex_unlock(&pdata->lock);
 			return -EINVAL;
 		}
 		ucontrol->value.integer.value[0] =

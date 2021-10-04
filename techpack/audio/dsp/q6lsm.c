@@ -35,7 +35,7 @@
 #include <dsp/audio_cal_utils.h>
 #include "adsp_err.h"
 
-#ifdef CONFIG_MACH_LGE
+#if defined(CONFIG_MACH_LGE) && !defined(CONFIG_SND_LGE_SM6150)
 #include <soc/qcom/subsystem_restart.h>
 #endif
 
@@ -373,9 +373,9 @@ void q6lsm_client_free(struct lsm_client *client)
 		pr_err("%s: Invalid Session %d\n", __func__, client->session);
 		return;
 	}
-	mutex_lock(&session_lock);
 	apr_deregister(client->apr);
 	client->mmap_apr = NULL;
+	mutex_lock(&session_lock);
 	q6lsm_session_free(client);
 	q6lsm_mmap_apr_dereg();
 	mutex_destroy(&client->cmd_lock);
@@ -879,7 +879,7 @@ static int q6lsm_do_open_v2(struct lsm_client *client,
 	else
 		client->use_topology = true;
 
-#ifdef CONFIG_MACH_LGE
+#if defined(CONFIG_MACH_LGE) && !defined(CONFIG_SND_LGE_SM6150)
 	if (rc == -ETIMEDOUT || rc == -ENODATA)
 		subsystem_restart("adsp");
 #endif

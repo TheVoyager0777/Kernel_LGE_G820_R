@@ -197,9 +197,9 @@ static int sdcardfs_symlink(struct inode *dir, struct dentry *dentry,
 
     saved_cred = override_fsids(SDCARDFS_SB(dir->i_sb),
             SDCARDFS_I(dir)->data);
-    if (!saved_cred)
+    if (!saved_cred) {
         return -ENOMEM;
-
+	}
 	sdcardfs_get_lower_path(dentry, &lower_path);
 	lower_dentry = lower_path.dentry;
 	lower_parent_dentry = lock_parent(lower_dentry);

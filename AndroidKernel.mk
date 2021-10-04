@@ -10,8 +10,6 @@ ifneq ($(TARGET_KERNEL_APPEND_DTB), true)
 $(info Using DTB Image)
 INSTALLED_DTBIMAGE_TARGET := $(PRODUCT_OUT)/dtb.img
 endif
-MAKE_ARGS := $(strip $(TARGET_KERNEL_MAKE_ARGS))
-KERNEL_DISABLE_DEBUGFS := $(TARGET_KERNEL_DISABLE_DEBUGFS)
 
 TARGET_KERNEL_MAKE_ENV := $(strip $(TARGET_KERNEL_MAKE_ENV))
 ifeq ($(TARGET_KERNEL_MAKE_ENV),)
@@ -125,17 +123,6 @@ ifdef RTIC_MPGEN
 RTIC_DTB := $(KERNEL_SYMLINK)/rtic_mp.dtb
 endif
 
-# Add RTIC DTB to dtb.img if RTIC MPGen is enabled.
-# Note: unfortunately we can't define RTIC DTS + DTB rule here as the
-# following variable/ tools (needed for DTS generation)
-# are missing - DTB_OBJS, OBJDUMP, KCONFIG_CONFIG, CC, DTC_FLAGS (the only available is DTC).
-# The existing RTIC kernel integration in scripts/link-vmlinux.sh generates RTIC MP DTS
-# that will be compiled with optional rule below.
-# To be safe, we check for MPGen enable.
-ifdef RTIC_MPGEN
-RTIC_DTB := $(KERNEL_SYMLINK)/rtic_mp.dtb
-endif
-
 KERNEL_CONFIG := $(KERNEL_OUT)/.config
 
 ifeq ($(KERNEL_DEFCONFIG)$(wildcard $(KERNEL_CONFIG)),)
@@ -158,7 +145,6 @@ $(info Using appended DTB)
 TARGET_PREBUILT_INT_KERNEL := $(TARGET_PREBUILT_INT_KERNEL)-dtb
 endif
 
-KERNEL_DEBUGFS := $(KERNEL_OUT)/tmp
 KERNEL_HEADERS_INSTALL := $(KERNEL_OUT)/usr
 KERNEL_HEADERS_TIMESTAMP := $(KERNEL_HEADERS_INSTALL)/build-timestamp
 KERNEL_MODULES_INSTALL ?= system
@@ -184,9 +170,6 @@ mpath=`dirname $$mdpath`; rm -rf $$mpath;\
 fi
 endef
 
-$(KERNEL_OUT): $(KERNEL_DEBUGFS)
-	mkdir -p $(KERNEL_OUT)
-
 ifneq ($(KERNEL_LEGACY_DIR),true)
 $(KERNEL_USR): $(KERNEL_HEADERS_INSTALL)
 	rm -rf $(KERNEL_SYMLINK)
@@ -203,6 +186,9 @@ ifeq ($(TARGET_PRODUCT), mh2lm_5g)
 KERNEL_CONFIG_OVERRIDE_FILES += mh2lm_5g_defconfig
 endif
 
+$(KERNEL_OUT):
+	mkdir -p $(KERNEL_OUT)
+
 $(KERNEL_CONFIG): $(KERNEL_OUT)
 	$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) $(KERNEL_MAKE_ENV) ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(real_cc) $(KERNEL_DEFCONFIG)
 	$(hide) if [ ! -z "$(KERNEL_CONFIG_OVERRIDE)" ]; then \
@@ -216,7 +202,7 @@ $(KERNEL_CONFIG): $(KERNEL_OUT)
 			$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) $(KERNEL_MAKE_ENV) ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(real_cc) oldconfig; fi
 
 ifeq ($(PRODUCT_SUPPORT_EXFAT), y)
-sinclude ./device/lge/common/fs/tuxera.mk
+sinclude ./device/lge/common/tuxera.mk
 endif
 
 ifeq ($(TARGET_KERNEL_APPEND_DTB), true)
@@ -263,22 +249,11 @@ endif
 
 $(KERNEL_HEADERS_TIMESTAMP): $(KERNEL_HEADERS_INSTALL)
 
-$(KERNEL_DEBUGFS):
-	KERNEL_DIR=$(TARGET_KERNEL_SOURCE) \
-	DEFCONFIG=$(KERNEL_DEFCONFIG) \
-	OUT_DIR=$(KERNEL_OUT) \
-	ARCH=$(KERNEL_ARCH) \
-	CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) \
-	DISABLE_DEBUGFS=$(KERNEL_DISABLE_DEBUGFS) \
-	$(TARGET_KERNEL_SOURCE)/disable_dbgfs.sh \
-	$(real_cc) \
-	$(TARGET_KERNEL_MAKE_ARGS)
-
 $(KERNEL_HEADERS_INSTALL): $(KERNEL_OUT)
 	$(hide) if [ ! -z "$(KERNEL_HEADER_DEFCONFIG)" ]; then \
-			rm -f $(BUILD_ROOT_LOC)$(KERNEL_CONFIG) && \
-			$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) $(KERNEL_MAKE_ENV) ARCH=$(KERNEL_HEADER_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(real_cc) $(KERNEL_HEADER_DEFCONFIG) && \
-			$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) $(KERNEL_MAKE_ENV) ARCH=$(KERNEL_HEADER_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(real_cc) headers_install && \
+			rm -f $(BUILD_ROOT_LOC)$(KERNEL_CONFIG); \
+			$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) $(KERNEL_MAKE_ENV) ARCH=$(KERNEL_HEADER_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(real_cc) $(KERNEL_HEADER_DEFCONFIG); \
+			$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) $(KERNEL_MAKE_ENV) ARCH=$(KERNEL_HEADER_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(real_cc) headers_install;\
 			if [ -d "$(KERNEL_HEADERS_INSTALL)/include/bringup_headers" ]; then \
 				cp -Rf  $(KERNEL_HEADERS_INSTALL)/include/bringup_headers/* $(KERNEL_HEADERS_INSTALL)/include/ ;\
 			fi ;\
@@ -297,13 +272,6 @@ $(KERNEL_HEADERS_INSTALL): $(KERNEL_OUT)
 				do cat $(TARGET_KERNEL_SOURCE)/arch/$(KERNEL_ARCH)/configs/$$override_file >> $(KERNEL_OUT)/.config; done; \
 			$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) $(KERNEL_MAKE_ENV) ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(real_cc) oldconfig; fi
 	$(hide) touch $@/build-timestamp
-
-# RTIC DTS to DTB (if MPGen enabled;
-# and make sure we don't break the build if rtic_mp.dts missing)
-$(RTIC_DTB): $(INSTALLED_KERNEL_TARGET)
-	stat $(KERNEL_SYMLINK)/rtic_mp.dts 2>/dev/null >&2 && \
-	$(DTC) -O dtb -o $(RTIC_DTB) -b 1 $(DTC_FLAGS) $(KERNEL_SYMLINK)/rtic_mp.dts || \
-	touch $(RTIC_DTB)
 
 # RTIC DTS to DTB (if MPGen enabled;
 # and make sure we don't break the build if rtic_mp.dts missing)

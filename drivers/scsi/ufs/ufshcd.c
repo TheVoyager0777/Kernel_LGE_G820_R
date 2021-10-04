@@ -415,6 +415,8 @@ static struct ufs_dev_fix ufs_fixups[] = {
 	UFS_FIX(UFS_VENDOR_SAMSUNG, UFS_ANY_MODEL,
 		UFS_DEVICE_QUIRK_RECOVERY_FROM_DL_NAC_ERRORS),
 #endif
+	UFS_FIX(UFS_VENDOR_MICRON, UFS_ANY_MODEL,
+		UFS_DEVICE_QUIRK_DELAY_BEFORE_LPM),
 	UFS_FIX(UFS_VENDOR_SAMSUNG, UFS_ANY_MODEL,
 		UFS_DEVICE_QUIRK_DELAY_BEFORE_LPM),
 	UFS_FIX(UFS_VENDOR_SAMSUNG, UFS_ANY_MODEL,
@@ -2190,6 +2192,7 @@ unblock_reqs:
 int ufshcd_hold(struct ufs_hba *hba, bool async)
 {
 	int rc = 0;
+	bool flush_result;
 	unsigned long flags;
 
 	if (!ufshcd_is_clkgating_allowed(hba))
@@ -2221,7 +2224,9 @@ start:
 				break;
 			}
 			spin_unlock_irqrestore(hba->host->host_lock, flags);
-			flush_work(&hba->clk_gating.ungate_work);
+			flush_result = flush_work(&hba->clk_gating.ungate_work);
+			if (hba->clk_gating.is_suspended && !flush_result)
+				goto out;
 			spin_lock_irqsave(hba->host->host_lock, flags);
 			if (hba->ufshcd_state == UFSHCD_STATE_OPERATIONAL)
 				goto start;
@@ -2259,6 +2264,439 @@ start:
 			rc = -EAGAIN;
 			hba->clk_gating.active_reqs--;
 			break;
+		}
+
+		spin_unlock_irqrestore(hba->host->host_lock, flags);
+		flush_work(&hba->clk_gating.ungate_work);
+		/* Make sure state is CLKS_ON before returning */
+		spin_lock_irqsave(hba->host->host_lock, flags);
+		goto start;
+	default:
+		dev_err(hba->dev, "%s: clk gating is in invalid state %d\n",
+				__func__, hba->clk_gating.state);
+		break;
+	}
+	spin_unlock_irqrestore(hba->host->host_lock, flags);
+out:
+	hba->ufs_stats.clk_hold.ts = ktime_get();
+	return rc;
+}
+EXPORT_SYMBOL_GPL(ufshcd_hold);
+
+static void ufshcd_gate_work(struct work_struct *work)
+{
+	struct ufs_hba *hba = container_of(work, struct ufs_hba,
+						clk_gating.gate_work);
+	unsigned long flags;
+
+	spin_lock_irqsave(hba->host->host_lock, flags);
+	/*
+	 * In case you are here to cancel this work the gating state
+	 * would be marked as REQ_CLKS_ON. In this case save time by
+	 * skipping the gating work and exit after changing the clock
+	 * state to CLKS_ON.
+	 */
+	if (hba->clk_gating.is_suspended ||
+		(hba->clk_gating.state != REQ_CLKS_OFF)) {
+		hba->clk_gating.state = CLKS_ON;
+		trace_ufshcd_clk_gating(dev_name(hba->dev),
+					hba->clk_gating.state);
+		goto rel_lock;
+	}
+
+	if (hba->clk_gating.active_reqs
+		|| hba->ufshcd_state != UFSHCD_STATE_OPERATIONAL
+		|| hba->lrb_in_use || hba->outstanding_tasks
+		|| hba->active_uic_cmd || hba->uic_async_done)
+		goto rel_lock;
+
+	spin_unlock_irqrestore(hba->host->host_lock, flags);
+
+	if (ufshcd_is_hibern8_on_idle_allowed(hba) &&
+	    hba->hibern8_on_idle.is_enabled)
+		/*
+		 * Hibern8 enter work (on Idle) needs clocks to be ON hence
+		 * make sure that it is flushed before turning off the clocks.
+		 */
+		flush_delayed_work(&hba->hibern8_on_idle.enter_work);
+
+	/* put the link into hibern8 mode before turning off clocks */
+	if (ufshcd_can_hibern8_during_gating(hba)) {
+		if (ufshcd_uic_hibern8_enter(hba)) {
+			hba->clk_gating.state = CLKS_ON;
+			trace_ufshcd_clk_gating(dev_name(hba->dev),
+						hba->clk_gating.state);
+			goto out;
+		}
+		ufshcd_set_link_hibern8(hba);
+	}
+
+	/*
+	 * If auto hibern8 is supported and enabled then the link will already
+	 * be in hibern8 state and the ref clock can be gated.
+	 */
+	if ((((ufshcd_is_auto_hibern8_supported(hba) &&
+	       hba->hibern8_on_idle.is_enabled)) ||
+	     !ufshcd_is_link_active(hba)) && !hba->no_ref_clk_gating)
+		ufshcd_disable_clocks(hba, true);
+	else
+		/* If link is active, device ref_clk can't be switched off */
+		ufshcd_disable_clocks_keep_link_active(hba, true);
+
+	/* Put the host controller in low power mode if possible */
+	ufshcd_hba_vreg_set_lpm(hba);
+
+	/*
+	 * In case you are here to cancel this work the gating state
+	 * would be marked as REQ_CLKS_ON. In this case keep the state
+	 * as REQ_CLKS_ON which would anyway imply that clocks are off
+	 * and a request to turn them on is pending. By doing this way,
+	 * we keep the state machine in tact and this would ultimately
+	 * prevent from doing cancel work multiple times when there are
+	 * new requests arriving before the current cancel work is done.
+	 */
+	spin_lock_irqsave(hba->host->host_lock, flags);
+	if (hba->clk_gating.state == REQ_CLKS_OFF) {
+		hba->clk_gating.state = CLKS_OFF;
+		trace_ufshcd_clk_gating(dev_name(hba->dev),
+					hba->clk_gating.state);
+	}
+rel_lock:
+	spin_unlock_irqrestore(hba->host->host_lock, flags);
+out:
+	return;
+}
+
+/* host lock must be held before calling this variant */
+static void __ufshcd_release(struct ufs_hba *hba, bool no_sched)
+{
+	if (!ufshcd_is_clkgating_allowed(hba))
+		return;
+
+	hba->clk_gating.active_reqs--;
+
+	if (hba->clk_gating.active_reqs || hba->clk_gating.is_suspended
+		|| hba->ufshcd_state != UFSHCD_STATE_OPERATIONAL
+		|| hba->lrb_in_use || hba->outstanding_tasks
+		|| hba->active_uic_cmd || hba->uic_async_done
+		|| ufshcd_eh_in_progress(hba) || no_sched)
+		return;
+
+	hba->clk_gating.state = REQ_CLKS_OFF;
+	trace_ufshcd_clk_gating(dev_name(hba->dev), hba->clk_gating.state);
+	hba->ufs_stats.clk_rel.ts = ktime_get();
+
+	hrtimer_start(&hba->clk_gating.gate_hrtimer,
+			ms_to_ktime(hba->clk_gating.delay_ms),
+			HRTIMER_MODE_REL);
+}
+
+void ufshcd_release(struct ufs_hba *hba, bool no_sched)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(hba->host->host_lock, flags);
+	__ufshcd_release(hba, no_sched);
+	spin_unlock_irqrestore(hba->host->host_lock, flags);
+}
+EXPORT_SYMBOL_GPL(ufshcd_release);
+
+static ssize_t ufshcd_clkgate_delay_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%lu\n", hba->clk_gating.delay_ms);
+}
+
+static ssize_t ufshcd_clkgate_delay_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	unsigned long flags, value;
+
+	if (kstrtoul(buf, 0, &value))
+		return -EINVAL;
+
+	spin_lock_irqsave(hba->host->host_lock, flags);
+	hba->clk_gating.delay_ms = value;
+	spin_unlock_irqrestore(hba->host->host_lock, flags);
+	return count;
+}
+
+static ssize_t ufshcd_clkgate_delay_pwr_save_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%lu\n",
+			hba->clk_gating.delay_ms_pwr_save);
+}
+
+static ssize_t ufshcd_clkgate_delay_pwr_save_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	unsigned long flags, value;
+
+	if (kstrtoul(buf, 0, &value))
+		return -EINVAL;
+
+	spin_lock_irqsave(hba->host->host_lock, flags);
+
+	hba->clk_gating.delay_ms_pwr_save = value;
+	if (ufshcd_is_clkscaling_supported(hba) &&
+	    !hba->clk_scaling.is_scaled_up)
+		hba->clk_gating.delay_ms = hba->clk_gating.delay_ms_pwr_save;
+
+	spin_unlock_irqrestore(hba->host->host_lock, flags);
+	return count;
+}
+
+static ssize_t ufshcd_clkgate_delay_perf_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%lu\n", hba->clk_gating.delay_ms_perf);
+}
+
+static ssize_t ufshcd_clkgate_delay_perf_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	unsigned long flags, value;
+
+	if (kstrtoul(buf, 0, &value))
+		return -EINVAL;
+
+	spin_lock_irqsave(hba->host->host_lock, flags);
+
+	hba->clk_gating.delay_ms_perf = value;
+	if (ufshcd_is_clkscaling_supported(hba) &&
+	    hba->clk_scaling.is_scaled_up)
+		hba->clk_gating.delay_ms = hba->clk_gating.delay_ms_perf;
+
+	spin_unlock_irqrestore(hba->host->host_lock, flags);
+	return count;
+}
+
+static ssize_t ufshcd_clkgate_enable_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", hba->clk_gating.is_enabled);
+}
+
+static ssize_t ufshcd_clkgate_enable_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	unsigned long flags;
+	u32 value;
+
+	if (kstrtou32(buf, 0, &value))
+		return -EINVAL;
+
+	value = !!value;
+	if (value == hba->clk_gating.is_enabled)
+		goto out;
+
+	if (value) {
+		ufshcd_release(hba, false);
+	} else {
+		spin_lock_irqsave(hba->host->host_lock, flags);
+		hba->clk_gating.active_reqs++;
+		spin_unlock_irqrestore(hba->host->host_lock, flags);
+	}
+
+	hba->clk_gating.is_enabled = value;
+out:
+	return count;
+}
+
+static enum hrtimer_restart ufshcd_clkgate_hrtimer_handler(
+					struct hrtimer *timer)
+{
+	struct ufs_hba *hba = container_of(timer, struct ufs_hba,
+					   clk_gating.gate_hrtimer);
+
+	queue_work(hba->clk_gating.clk_gating_workq,
+				&hba->clk_gating.gate_work);
+
+	return HRTIMER_NORESTART;
+}
+
+static void ufshcd_init_clk_gating(struct ufs_hba *hba)
+{
+	struct ufs_clk_gating *gating = &hba->clk_gating;
+	char wq_name[sizeof("ufs_clk_gating_00")];
+
+	hba->clk_gating.state = CLKS_ON;
+
+	if (!ufshcd_is_clkgating_allowed(hba))
+		return;
+
+	INIT_WORK(&gating->gate_work, ufshcd_gate_work);
+	INIT_WORK(&gating->ungate_work, ufshcd_ungate_work);
+	/*
+	 * Clock gating work must be executed only after auto hibern8
+	 * timeout has expired in the hardware or after aggressive
+	 * hibern8 on idle software timeout. Using jiffy based low
+	 * resolution delayed work is not reliable to guarantee this,
+	 * hence use a high resolution timer to make sure we schedule
+	 * the gate work precisely more than hibern8 timeout.
+	 *
+	 * Always make sure gating->delay_ms > hibern8_on_idle->delay_ms
+	 */
+	hrtimer_init(&gating->gate_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	gating->gate_hrtimer.function = ufshcd_clkgate_hrtimer_handler;
+
+	snprintf(wq_name, ARRAY_SIZE(wq_name), "ufs_clk_gating_%d",
+			hba->host->host_no);
+	hba->clk_gating.clk_gating_workq =
+		create_singlethread_workqueue(wq_name);
+
+	gating->is_enabled = true;
+
+	gating->delay_ms_pwr_save = UFSHCD_CLK_GATING_DELAY_MS_PWR_SAVE;
+	gating->delay_ms_perf = UFSHCD_CLK_GATING_DELAY_MS_PERF;
+
+	/* start with performance mode */
+	gating->delay_ms = gating->delay_ms_perf;
+
+	if (!ufshcd_is_clkscaling_supported(hba))
+		goto scaling_not_supported;
+
+	gating->delay_pwr_save_attr.show = ufshcd_clkgate_delay_pwr_save_show;
+	gating->delay_pwr_save_attr.store = ufshcd_clkgate_delay_pwr_save_store;
+	sysfs_attr_init(&gating->delay_pwr_save_attr.attr);
+	gating->delay_pwr_save_attr.attr.name = "clkgate_delay_ms_pwr_save";
+	gating->delay_pwr_save_attr.attr.mode = S_IRUGO | S_IWUSR;
+	if (device_create_file(hba->dev, &gating->delay_pwr_save_attr))
+		dev_err(hba->dev, "Failed to create sysfs for clkgate_delay_ms_pwr_save\n");
+
+	gating->delay_perf_attr.show = ufshcd_clkgate_delay_perf_show;
+	gating->delay_perf_attr.store = ufshcd_clkgate_delay_perf_store;
+	sysfs_attr_init(&gating->delay_perf_attr.attr);
+	gating->delay_perf_attr.attr.name = "clkgate_delay_ms_perf";
+	gating->delay_perf_attr.attr.mode = S_IRUGO | S_IWUSR;
+	if (device_create_file(hba->dev, &gating->delay_perf_attr))
+		dev_err(hba->dev, "Failed to create sysfs for clkgate_delay_ms_perf\n");
+
+	goto add_clkgate_enable;
+
+scaling_not_supported:
+	hba->clk_gating.delay_attr.show = ufshcd_clkgate_delay_show;
+	hba->clk_gating.delay_attr.store = ufshcd_clkgate_delay_store;
+	sysfs_attr_init(&hba->clk_gating.delay_attr.attr);
+	hba->clk_gating.delay_attr.attr.name = "clkgate_delay_ms";
+	hba->clk_gating.delay_attr.attr.mode = 0644;
+	if (device_create_file(hba->dev, &hba->clk_gating.delay_attr))
+		dev_err(hba->dev, "Failed to create sysfs for clkgate_delay\n");
+
+add_clkgate_enable:
+	gating->enable_attr.show = ufshcd_clkgate_enable_show;
+	gating->enable_attr.store = ufshcd_clkgate_enable_store;
+	sysfs_attr_init(&gating->enable_attr.attr);
+	gating->enable_attr.attr.name = "clkgate_enable";
+	gating->enable_attr.attr.mode = S_IRUGO | S_IWUSR;
+	if (device_create_file(hba->dev, &gating->enable_attr))
+		dev_err(hba->dev, "Failed to create sysfs for clkgate_enable\n");
+}
+
+static void ufshcd_exit_clk_gating(struct ufs_hba *hba)
+{
+	if (!ufshcd_is_clkgating_allowed(hba))
+		return;
+	if (ufshcd_is_clkscaling_supported(hba)) {
+		device_remove_file(hba->dev,
+				   &hba->clk_gating.delay_pwr_save_attr);
+		device_remove_file(hba->dev, &hba->clk_gating.delay_perf_attr);
+	} else {
+		device_remove_file(hba->dev, &hba->clk_gating.delay_attr);
+	}
+	device_remove_file(hba->dev, &hba->clk_gating.enable_attr);
+	ufshcd_cancel_gate_work(hba);
+	cancel_work_sync(&hba->clk_gating.ungate_work);
+	destroy_workqueue(hba->clk_gating.clk_gating_workq);
+}
+
+static void ufshcd_set_auto_hibern8_timer(struct ufs_hba *hba, u32 delay)
+{
+	ufshcd_rmwl(hba, AUTO_HIBERN8_TIMER_SCALE_MASK |
+			 AUTO_HIBERN8_IDLE_TIMER_MASK,
+			AUTO_HIBERN8_TIMER_SCALE_1_MS | delay,
+			REG_AUTO_HIBERNATE_IDLE_TIMER);
+	/* Make sure the timer gets applied before further operations */
+	mb();
+}
+
+/**
+ * ufshcd_hibern8_hold - Make sure that link is not in hibern8.
+ *
+ * @hba: per adapter instance
+ * @async: This indicates whether caller wants to exit hibern8 asynchronously.
+ *
+ * Exit from hibern8 mode and set the link as active.
+ *
+ * Return 0 on success, non-zero on failure.
+ */
+static int ufshcd_hibern8_hold(struct ufs_hba *hba, bool async)
+{
+	int rc = 0;
+	unsigned long flags;
+
+	if (!ufshcd_is_hibern8_on_idle_allowed(hba))
+		goto out;
+
+	spin_lock_irqsave(hba->host->host_lock, flags);
+	hba->hibern8_on_idle.active_reqs++;
+
+	if (ufshcd_eh_in_progress(hba)) {
+		spin_unlock_irqrestore(hba->host->host_lock, flags);
+		return 0;
+	}
+
+start:
+	switch (hba->hibern8_on_idle.state) {
+	case HIBERN8_EXITED:
+		break;
+	case REQ_HIBERN8_ENTER:
+		if (cancel_delayed_work(&hba->hibern8_on_idle.enter_work)) {
+			hba->hibern8_on_idle.state = HIBERN8_EXITED;
+			trace_ufshcd_hibern8_on_idle(dev_name(hba->dev),
+				hba->hibern8_on_idle.state);
+			break;
+		}
+		/*
+		 * If we here, it means Hibern8 enter work is either done or
+		 * currently running. Hence, fall through to cancel hibern8
+		 * work and exit hibern8.
+		 */
+	case CLKS_OFF:
+		__ufshcd_scsi_block_requests(hba);
+		hba->clk_gating.state = REQ_CLKS_ON;
+		trace_ufshcd_clk_gating(dev_name(hba->dev),
+					hba->clk_gating.state);
+		queue_work(hba->clk_gating.clk_gating_workq,
+				&hba->clk_gating.ungate_work);
+		/*
+		 * fall through to check if we should wait for this
+		 * work to be done or not.
+		 */
+	case REQ_HIBERN8_EXIT:
+		if (async) {
+			rc = -EAGAIN;
+			hba->hibern8_on_idle.active_reqs--;
+			break;
+		} else {
+			spin_unlock_irqrestore(hba->host->host_lock, flags);
+			flush_work(&hba->hibern8_on_idle.exit_work);
+			/* Make sure state is HIBERN8_EXITED before returning */
+			spin_lock_irqsave(hba->host->host_lock, flags);
+			goto start;
 		}
 
 		spin_unlock_irqrestore(hba->host->host_lock, flags);
@@ -7442,6 +7880,7 @@ static irqreturn_t ufshcd_check_errors(struct ufs_hba *hba)
 
 	if (hba->errors & INT_FATAL_ERRORS || hba->ce_error)
 		queue_eh_work = true;
+	}
 
 	if (hba->errors & UIC_LINK_LOST) {
 		dev_err(hba->dev, "%s: UIC_LINK_LOST received, errors 0x%x\n",
@@ -7555,7 +7994,7 @@ static irqreturn_t ufshcd_sl_intr(struct ufs_hba *hba, u32 intr_status)
  */
 static irqreturn_t ufshcd_intr(int irq, void *__hba)
 {
-	u32 intr_status, enabled_intr_status;
+	u32 intr_status, enabled_intr_status = 0;
 	irqreturn_t retval = IRQ_NONE;
 	struct ufs_hba *hba = __hba;
 	int retries = hba->nutrs;
@@ -7570,7 +8009,7 @@ static irqreturn_t ufshcd_intr(int irq, void *__hba)
 	 * read, make sure we handle them by checking the interrupt status
 	 * again in a loop until we process all of the reqs before returning.
 	 */
-	do {
+	while (intr_status && retries--) {
 		enabled_intr_status =
 			intr_status & ufshcd_readl(hba, REG_INTERRUPT_ENABLE);
 		if (intr_status)
@@ -7579,7 +8018,14 @@ static irqreturn_t ufshcd_intr(int irq, void *__hba)
 			retval |= ufshcd_sl_intr(hba, enabled_intr_status);
 
 		intr_status = ufshcd_readl(hba, REG_INTERRUPT_STATUS);
-	} while (intr_status && --retries);
+	}
+
+	if (retval == IRQ_NONE) {
+		dev_err(hba->dev, "%s: Unhandled interrupt 0x%08x\n",
+					__func__, intr_status);
+		ufshcd_hex_dump(hba, "host regs: ", hba->mmio_base,
+					UFSHCI_REG_SPACE_SIZE);
+	}
 
 	if (retval == IRQ_NONE) {
 		dev_err(hba->dev, "%s: Unhandled interrupt 0x%08x\n",
@@ -7902,7 +8348,7 @@ static int ufshcd_abort(struct scsi_cmnd *cmd)
 			/* command completed already */
 			dev_err(hba->dev, "%s: cmd at tag %d successfully cleared from DB.\n",
 				__func__, tag);
-			goto out;
+			goto cleanup;
 		} else {
 			dev_err(hba->dev,
 				"%s: no response from device. tag = %d, err %d\n",
@@ -7936,6 +8382,7 @@ static int ufshcd_abort(struct scsi_cmnd *cmd)
 		goto out;
 	}
 
+cleanup:
 	scsi_dma_unmap(cmd);
 
 	spin_lock_irqsave(host->host_lock, flags);

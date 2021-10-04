@@ -37,14 +37,14 @@
 #endif
 
 //#define     USE_CONTROL_EXTERNAL_LDO_FOR_DVDD // control a external LDO drained from PMIC
-#ifdef USE_CONTROL_EXTERNAL_LDO_FOR_DVDD
+//#ifdef USE_CONTROL_EXTERNAL_LDO_FOR_DVDD
 #include    <linux/regulator/consumer.h>
-#endif
+//#endif
 
 #include    "es9218p.h"
 #include    "../../../../include/soc/qcom/lge/board_lge.h"
 
-#define     ES9218P_SYSFS 0               // use this feature only for user debug, not release
+#define     ES9218P_SYSFS               // use this feature only for user debug, not release
 
 //#define     USE_HPAHiQ                  // THD increased by ~2dB and Power Consumption increasded by ~2mA
 //#define   ES9218P_DEBUG               // ESS pop-click debugging, define to enable step by step override sequence debug messages and time delays.  Use to pinpoint pop-click.
@@ -64,7 +64,6 @@ static int  es9218p_sabre_lpb2hifitwo(void);
 static int  es9218p_sabre_hifione2lpb(void);
 static int  es9218p_sabre_hifitwo2lpb(void);
 
-static int es9218_set_avc_volume(struct i2c_client *client, int vol);
 static int  es9218p_sabre_amp_start(struct i2c_client *client, int headset);
 static int  es9218p_sabre_amp_stop(struct i2c_client *client, int headset);
 static int  es9218p_standby2lpb(void);
@@ -336,11 +335,6 @@ static int g_right_volume = 0;
 static int g_sabre_cf_num = 8; // default = 8
 static int g_dop_flag = 0;
 
-#ifdef ES9218P_SYSFS
-static int forced_headset_type = -1;
-static int forced_avc_volume = -1;
-#endif
-
 static int g_auto_mute_flag = 0;
 #ifdef ES9218P_DEBUG
 static int g_debug_delay = 500; // ESS pop-click debugging step time delay
@@ -369,6 +363,11 @@ static u8  us_aux_harmonic_comp_left[4] = {0x2F, 0x01, 0xDA, 0xFD};
 static u8  us_aux_harmonic_comp_right[4] = {0xE7, 0x00, 0x00, 0xFE};
 bool us_sku = false;
 #endif
+#elif defined(CONFIG_MACH_SM6150_MH3_LAO_KR)
+static u8  advance_harmonic_comp_left[4] = {0xa0, 0x02, 0x30, 0x00};
+static u8  advance_harmonic_comp_right[4] = {0x28, 0x02, 0x30, 0x00};
+static u8  aux_harmonic_comp_left[4] = {0x7a, 0x01, 0xe0, 0xfd};
+static u8  aux_harmonic_comp_right[4] = {0x05, 0x01, 0x1f, 0xfe};
 #else
 static u8  advance_harmonic_comp_left[4] = {0x30, 0x02, 0x3c, 0x00};
 static u8  advance_harmonic_comp_right[4] = {0xd6, 0x01, 0x3c, 0x00};
@@ -608,66 +607,12 @@ static ssize_t es9218_registers_store(struct device *dev,
 static DEVICE_ATTR(registers, S_IWUSR | S_IRUGO,
         es9218_registers_show, es9218_registers_store);
 
-static ssize_t set_forced_headset_type(struct device *dev,
-                   struct device_attribute *attr,
-                   const char *buf, size_t count)
-{
-    int input_val; //0, 1, 2
-    sscanf(buf, "%d", &input_val);
-    es9218p_sabre_hifi2lpb();
-    g_volume = 0;
-
-    g_headset_type = input_val + 1;
-    forced_headset_type = input_val + 1;
-
-    es9218p_sabre_bypass2hifi();
-
-    return count;
-}
-static ssize_t get_forced_headset_type(struct device *dev,
-                   struct device_attribute *attr,
-                   char *buf)
-{
-    return sprintf(buf, "%i\n", g_headset_type);
-}
-static DEVICE_ATTR(headset_type, S_IWUSR|S_IRUGO, get_forced_headset_type, set_forced_headset_type);
-
-static ssize_t set_forced_avc_volume(struct device *dev,
-                   struct device_attribute *attr,
-                   const char *buf, size_t count)
-{
-    int input_vol;
-    sscanf(buf, "%d", &input_vol);
-
-    if (input_vol >= sizeof(avc_vol_tbl)/sizeof(avc_vol_tbl[0])) {
-        pr_err("%s() : Invalid vol = %d return \n", __func__, input_vol);
-        return 0;
-    }
-
-    g_avc_volume = input_vol;
-    forced_avc_volume = input_vol;
-
-    es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);
-
-    return count;
-}
-
-static ssize_t get_forced_avc_volume(struct device *dev,
-                   struct device_attribute *attr,
-                   char *buf)
-{
-    return sprintf(buf, "%i\n", g_avc_volume);
-}
-static DEVICE_ATTR(avc_volume, S_IWUSR|S_IRUGO, get_forced_avc_volume, set_forced_avc_volume);
-
 static struct attribute *es9218_attrs[] = {
 #ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
 	&dev_attr_fade_mute_count.attr,
 	&dev_attr_fade_mute_term.attr,
 #endif
     &dev_attr_registers.attr,
-    &dev_attr_headset_type.attr,
-    &dev_attr_avc_volume.attr,
     NULL
 };
 
@@ -830,7 +775,6 @@ static void es9218_reset_gpio_L(void)
     es9218_hsdet_l_switch_gpio_L();
     mdelay(1);
 #endif
-
     gpio_set_value(g_es9218_priv->es9218_data->reset_gpio, 0);
 
     pr_info("%s(): pa_gpio_level = %d\n", __func__, __gpio_get_value(g_es9218_priv->es9218_data->reset_gpio));
@@ -1655,11 +1599,6 @@ static int es9218p_sabre_bypass2hifi(void)
         es9218p_set_bit_width(g_dop_flag, ESS_MODE_DoP);
     }
 
-#ifdef ES9218P_SYSFS
-    if(forced_headset_type != -1 && forced_headset_type != g_headset_type)
-        g_headset_type = forced_headset_type;
-#endif
-
     es9218_set_thd(g_es9218_priv->i2c_client, g_headset_type);
 #if 0 /* CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER*/
     es9218_sabre_cfg_custom_filter(&es9218_sabre_custom_ft[g_sabre_cf_num]);
@@ -1670,11 +1609,6 @@ static int es9218p_sabre_bypass2hifi(void)
     pr_info("%s() : g_left_volume = %d, g_right_volume = %d \n", __func__, g_left_volume, g_right_volume);
 
     es9218_master_trim(g_es9218_priv->i2c_client, g_volume);                        // set master trim level
-
-#ifdef ES9218P_SYSFS
-    if(forced_avc_volume != -1 && forced_avc_volume != g_avc_volume)
-        g_avc_volume = forced_avc_volume;
-#endif
 
     es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);                 // set analog volume control, must happen before amp start
     es9218p_sabre_amp_start(g_es9218_priv->i2c_client, g_headset_type);             // move to HiFi mode
@@ -2197,11 +2131,6 @@ static int es9218_headset_type_put(struct snd_kcontrol *kcontrol,
     value = (int)ucontrol->value.integer.value[0];
 
     if(value != 0) {
-#ifdef ES9218P_SYSFS
-        if(forced_headset_type != -1 && forced_headset_type != g_headset_type)
-            g_headset_type = forced_headset_type;
-        else
-#endif
         g_headset_type = value;
         pr_info("%s(): type = %d, state = %s\n ", __func__, value, power_state[es9218_power_state]);
     } else {
@@ -2389,9 +2318,19 @@ static int lge_ess_fade_inout_put(struct snd_kcontrol *kcontrol, struct snd_ctl_
         pr_info("%s(): fade in out work queue initialize. \n", __func__);
 
         mute_workqueue = create_workqueue("mute_workqueue");
+#ifdef CONFIG_MACH_SM6150_MH3_LAO_KR
+        if(!mute_workqueue) {
+            lge_ess_fade_inout_init = false;
+            pr_err("%s() : create_workqueue failed!!\n", __func__);
+            return 0;
+        }
+#endif
         mute_work = devm_kzalloc(&g_es9218_priv->i2c_client->dev, sizeof(struct delayed_work), GFP_KERNEL);
         if(!mute_work) {
             lge_ess_fade_inout_init = false;
+#ifdef CONFIG_MACH_SM6150_MH3_LAO_KR
+			destroy_workqueue(mute_workqueue);
+#endif
             pr_err("%s() : devm_kzalloc failed!!\n", __func__);
             return 0;
         }
@@ -2457,10 +2396,6 @@ static int es9218_avc_volume_put(struct snd_kcontrol *kcontrol,
         return 0;
     }
 
-#ifdef ES9218P_SYSFS
-    if(forced_avc_volume != -1 && forced_avc_volume != g_avc_volume)
-        g_avc_volume = forced_avc_volume;
-#endif
     es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);
     return ret;
 }
@@ -2628,7 +2563,12 @@ static int es9218_chip_state_get(struct snd_kcontrol *kcontrol,
     mutex_lock(&g_es9218_priv->power_lock);
     es9218_power_gpio_H();
     mdelay(1);
+#ifdef CONFIG_MACH_SM6150_MH3_LAO_KR
+    es9218_reset_gpio_H();
+    mdelay(1);
+#else
 #ifdef WORKAROUND_FOR_CORNER_SAMPLES
+
     es9218_reset_gpio_H();
     mdelay(1);
 
@@ -2652,6 +2592,7 @@ static int es9218_chip_state_get(struct snd_kcontrol *kcontrol,
 #else /* Original code. Finally, we MUST use code below if ESS confirms that chips have no problems */
     es9218_reset_gpio_H();
     mdelay(1);
+#endif
 #endif
 
     if(!g_ess_rev_check) // ESS Revision check is one time during the booting.
@@ -3034,7 +2975,9 @@ static int es9218_populate_get_pdata(struct device *dev,
     u32 vol_suply[2];
     int ret;
 #endif
-
+#ifdef CONFIG_MACH_SM6150_MH3_LAO_KR
+    int ret;
+#endif
     pdata->reset_gpio = of_get_named_gpio(dev->of_node,
             "dac,reset-gpio", 0);
 
@@ -3159,7 +3102,21 @@ static int es9218_populate_get_pdata(struct device *dev,
     } else {
         pdata->use_internal_ldo = false;
     }
-
+#ifdef CONFIG_MACH_SM6150_MH3_LAO_KR
+    if (of_property_read_bool(dev->of_node, "dac,comparator-supply")){
+        pdata->dac_comparator_regulator = devm_regulator_get(dev,"dac,comparator");
+        if(IS_ERR(pdata->dac_comparator_regulator)){
+            ret = PTR_ERR(pdata->dac_comparator_regulator);
+            pr_err("%s(): dac_comparator_regulator get fail %d\n", __func__,ret);
+			return -EINVAL;
+        }
+        ret = regulator_enable(pdata->dac_comparator_regulator);
+        if (ret < 0) {
+            pr_err("%s(): dac_vdd_regulator enable fail %d\n", __func__,ret);
+            return -EINVAL;
+        }
+    }
+#endif
     pr_info("%s: use-internal-ldo is [%s]\n", __func__, pdata->use_internal_ldo?"enabled":"disabled");
 
     return 0;
@@ -3423,7 +3380,11 @@ static void es9218_shutdown(struct snd_pcm_substream *substream,
         pm_qos_add_request(&req, PM_QOS_CPU_DMA_LATENCY, 0);
     }
 #endif
+#ifdef CONFIG_MACH_SM6150_MH3_LAO_KR
+    schedule_delayed_work(&g_es9218_priv->sleep_work, msecs_to_jiffies(3000));      //  3 Sec
+#else
     schedule_delayed_work(&g_es9218_priv->sleep_work, msecs_to_jiffies(2000));      //  2 Sec
+#endif
 #endif
 
     es9218_start = 0;
@@ -3434,8 +3395,9 @@ static int es9218_hw_free(struct snd_pcm_substream *substream,
                struct snd_soc_dai *dai)
 {
     struct snd_soc_codec *codec = dai->codec;
-
+#ifndef CONFIG_MACH_SM6150_MH3_LAO_KR
     mdelay(20);
+#endif
     dev_info(codec->dev, "%s(): entry\n", __func__);
 
     return 0;
@@ -3510,6 +3472,14 @@ static struct snd_soc_codec_driver soc_codec_dev_es9218 = {
 	},
 };
 
+
+#ifdef CONFIG_MACH_LGE
+int es9218_module_dep(void)
+{
+	return 0;
+}
+EXPORT_SYMBOL(es9218_module_dep);
+#endif
 
 static int es9218_probe(struct i2c_client *client,const struct i2c_device_id *id)
 {
@@ -3666,6 +3636,14 @@ static int es9218_remove(struct i2c_client *client)
     pdata = (struct es9218_data*)i2c_get_clientdata(client);    //pdata = (struct es9218_data*)client->dev.driver_data;
     if( pdata->vreg_dvdd != NULL )
         regulator_put(pdata->vreg_dvdd);
+#endif
+#ifdef CONFIG_MACH_SM6150_MH3_LAO_KR
+    struct es9218_data  *pdata;
+    pdata = (struct es9218_data*)i2c_get_clientdata(client);    //pdata = (struct es9218_data*)client->dev.driver_data;
+
+    if (of_property_read_bool(client->dev.of_node, "dac,comparator-supply")){
+        regulator_disable(pdata->dac_comparator_regulator);
+    }
 #endif
     snd_soc_unregister_codec(&client->dev);
     mutex_destroy(&g_es9218_priv->power_lock);

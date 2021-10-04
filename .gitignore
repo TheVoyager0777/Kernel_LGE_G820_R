@@ -123,12 +123,6 @@ all.config
 # Kdevelop4
 *.kdev4
 
-# fetched Android config fragments
-kernel/configs/android-*.cfg
-
-#
-#Ignoring Android.bp link file
-#
-Android.bp
+out
 build.sh
-linux-stable.sh
+release
