@@ -207,7 +207,7 @@ static int sdcardfs_symlink(struct inode *dir, struct dentry *dentry,
 	err = vfs_symlink(d_inode(lower_parent_dentry), lower_dentry, symname);
 	if (err)
 		goto out;
-	err = sdcardfs_interpose(dentry, dir->i_sb, &lower_path, SDCARDFS_I(dir)->data->userid);
+	err = sdcardfs_interpose(dir, dentry, dir->i_sb, &lower_path, SDCARDFS_I(dir)->data->userid);
 	if (err)
 		goto out;
 	fsstack_copy_attr_times(dir, sdcardfs_lower_inode(dir));
