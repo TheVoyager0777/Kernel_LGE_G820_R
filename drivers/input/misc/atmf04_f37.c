@@ -780,9 +780,10 @@ static unsigned char load_firmware(struct atmf04_data *data, struct i2c_client *
 
 			if(chk_done(FL_EFLA_TIMEOUT_CNT, client) == RTN_TIMEOUT)
 			{
-			  if (fw)
+			  if (fw) {
 			    release_firmware(fw);
 			    return RTN_TIMEOUT;
+			  }
 			}
 
 			count++;
