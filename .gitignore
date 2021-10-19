@@ -123,6 +123,10 @@ all.config
 # Kdevelop4
 *.kdev4
 
+/pack/release
+new-boot.img
+/pack/dtb
+/pack/kernel
 out
 build.sh
 release
