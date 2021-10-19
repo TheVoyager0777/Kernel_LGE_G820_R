@@ -1407,15 +1407,11 @@ kselftest-merge:
 
 ifdef CONFIG_MODULES
 
-# By default, build modules as well
-
-all: modules
-
 # When we're building modules with modversions, we need to consider
 # the built-in objects during the descend as well, in order to
 # make sure the checksums are up to date before we record them.
 ifdef CONFIG_MODVERSIONS
-  KBUILD_BUILTIN := 1
+  KBUILD_BUILTIN := 0
 endif
 
 # Build modules
@@ -1702,7 +1698,7 @@ else # KBUILD_EXTMOD
 #                      Assumes install directory is already created
 
 # We are always building modules
-KBUILD_MODULES := 1
+KBUILD_MODULES := 0
 
 PHONY += $(objtree)/Module.symvers
 $(objtree)/Module.symvers:
