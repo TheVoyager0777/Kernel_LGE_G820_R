@@ -5,14 +5,14 @@ white='\033[0m'
 red='\033[0;31m'
 gre='\e[0;32m'
 
-ANYKERNEL3_DIR=$PWD/AnyKernel3
+ANYKERNEL3_DIR=$PWD/release/Dragon
 FINAL_KERNEL_IMG=kernel-alpham-r-VoyagerIII-$(git rev-parse --short=7 HEAD)img
-IMAGE_GZ=$PWD/out/arch/arm64/boot/Image.gz
+IMAGE_GZ=$PWD/out/arch/arm64/boot/Image.gz-dtb
 ccache_=`which ccache`
 export ARCH=arm64
 export SUBARCH=arm64
 export HEADER_ARCH=arm64
-export CLANG_PATH=/home/user/fc
+export CLANG_PATH=/home/user/cer/clang-r433403
 
 export KBUILD_BUILD_HOST="Voayger-sever"
 export KBUILD_BUILD_USER="TheVoyager"
@@ -38,7 +38,8 @@ if [ ! -f "$IMAGE_GZ" ]; then
 echo "!!! Image.gz not found"
 exit 1
 fi
-cp -f ./out/arch/arm64/boot/Image.gz-dtb ./pack/Image.gz-dtb
+cp ./out/arch/arm64/boot/Image.gz-dtb ./pack/Image.gz-dtb
+cp ./out/arch/arm64/boot/Image.gz-dtb ./release/Dragon/Image.gz-dtb
 cd ./pack
 rm -r ./release
 mkdir release
@@ -48,6 +49,6 @@ mv kernel_dtb dtb
 ./magiskboot cpio ramdisk.cpio "mkdir 000 .backup" "mv init .backup/init" "add 750 init magiskinit"
 ./magiskboot hexpatch kernel 736B69705F696E697472616D6673 77616E745F696E697472616D6673
 ./magiskboot repack ./magisk.img
-cp new-boot.img ./release/kernel-alpham-r-VoyagerIII-$(git rev-parse --short=7 HEAD).img
+cp -f new-boot.img ./release/kernel-alpham-r-VoyagerIII-$(git rev-parse --short=7 HEAD).img
 echo -e "$gre << Build completed in $(($Diff / 60)) minutes and $(($Diff % 60)) seconds >> \n $white"
 echo "Check out ./release/$FINAL_KERNEL_IMG"
