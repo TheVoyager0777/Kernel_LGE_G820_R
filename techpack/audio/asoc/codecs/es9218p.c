@@ -44,7 +44,7 @@
 #include    "es9218p.h"
 #include    "../../../../include/soc/qcom/lge/board_lge.h"
 
-#define     ES9218P_SYSFS 0               // use this feature only for user debug, not release
+#define     ES9218P_SYSFS 0              // use this feature only for user debug, not release
 
 //#define     USE_HPAHiQ                  // THD increased by ~2dB and Power Consumption increasded by ~2mA
 //#define   ES9218P_DEBUG               // ESS pop-click debugging, define to enable step by step override sequence debug messages and time delays.  Use to pinpoint pop-click.
@@ -64,13 +64,13 @@ static int  es9218p_sabre_lpb2hifitwo(void);
 static int  es9218p_sabre_hifione2lpb(void);
 static int  es9218p_sabre_hifitwo2lpb(void);
 
-static int es9218_set_avc_volume(struct i2c_client *client, int vol);
+static int  es9218_set_avc_volume(struct i2c_client *client, int vol);
 static int  es9218p_sabre_amp_start(struct i2c_client *client, int headset);
 static int  es9218p_sabre_amp_stop(struct i2c_client *client, int headset);
 static int  es9218p_standby2lpb(void);
 static int  es9218p_lpb2standby(void);
-static int es9218p_set_volume_rate(unsigned int sample_rate, unsigned int ess_mode);
-static int es9218p_set_bit_width(unsigned int bit_width, unsigned int ess_mode);
+static int  es9218p_set_volume_rate(unsigned int sample_rate, unsigned int ess_mode);
+static int  es9218p_set_bit_width(unsigned int bit_width, unsigned int ess_mode);
 static void es9218p_initialize_registers(unsigned int ess_mode);
 
 #ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
@@ -671,7 +671,7 @@ static struct attribute *es9218_attrs[] = {
 	&dev_attr_fade_mute_term.attr,
 #endif
     &dev_attr_registers.attr,
-    &dev_attr_headset_type.attr,
+	&dev_attr_headset_type.attr,
     &dev_attr_avc_volume.attr,
     NULL
 };
