@@ -1,8 +1,7 @@
 /*
  * random.c -- A strong random number generator
  *
- * Copyright (C) 2017 Jason A. Donenfeld <Jason@zx2c4.com>. All
- * Rights Reserved.
+ * Copyright (C) 2017-2022 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  *
  * Copyright Matt Mackall <mpm@selenic.com>, 2003, 2004, 2005
  *
@@ -78,12 +77,12 @@
  * an *estimate* of how many bits of randomness have been stored into
  * the random number generator's internal state.
  *
- * When random bytes are desired, they are obtained by taking the SHA
- * hash of the contents of the "entropy pool".  The SHA hash avoids
+ * When random bytes are desired, they are obtained by taking the BLAKE2s
+ * hash of the contents of the "entropy pool".  The BLAKE2s hash avoids
  * exposing the internal state of the entropy pool.  It is believed to
  * be computationally infeasible to derive any useful information
- * about the input of SHA from its output.  Even if it is possible to
- * analyze SHA in some clever way, as long as the amount of data
+ * about the input of BLAKE2s from its output.  Even if it is possible to
+ * analyze BLAKE2s in some clever way, as long as the amount of data
  * returned from the generator is less than the inherent entropy in
  * the pool, the output data is totally unpredictable.  For this
  * reason, the routine decreases its internal estimate of how many
@@ -93,7 +92,7 @@
  * If this estimate goes to zero, the routine can still generate
  * random numbers; however, an attacker may (at least in theory) be
  * able to infer the future output of the generator from prior
- * outputs.  This requires successful cryptanalysis of SHA, which is
+ * outputs.  This requires successful cryptanalysis of BLAKE2s, which is
  * not believed to be feasible, but there is a remote possibility.
  * Nonetheless, these numbers should be useful for the vast majority
  * of purposes.
@@ -347,7 +346,8 @@
 #include <linux/syscalls.h>
 #include <linux/completion.h>
 #include <linux/uuid.h>
-#include <crypto/chacha.h>
+#include <crypto/chacha20.h>
+#include <crypto/blake2s.h>
 
 #include <asm/processor.h>
 #include <linux/uaccess.h>
@@ -367,10 +367,7 @@
 #define INPUT_POOL_WORDS	(1 << (INPUT_POOL_SHIFT-5))
 #define OUTPUT_POOL_SHIFT	10
 #define OUTPUT_POOL_WORDS	(1 << (OUTPUT_POOL_SHIFT-5))
-#define EXTRACT_SIZE		10
-
-
-#define LONGS(x) (((x) + sizeof(unsigned long) - 1)/sizeof(unsigned long))
+#define EXTRACT_SIZE		(BLAKE2S_HASH_SIZE / 2)
 
 /*
  * To allow fractional bits to be tracked, the entropy_count field is
@@ -406,7 +403,7 @@ static int random_write_wakeup_bits = 28 * OUTPUT_POOL_WORDS;
  * Thanks to Colin Plumb for suggesting this.
  *
  * The mixing operation is much less sensitive than the output hash,
- * where we use SHA-1.  All that we want of mixing operation is that
+ * where we use BLAKE2s.  All that we want of mixing operation is that
  * it be a good non-cryptographic hash; i.e. it not produce collisions
  * when fed "random" data of the sort we expect to see.  As long as
  * the pool state differs for different inputs, we have preserved the
@@ -477,9 +474,10 @@ static bool crng_need_final_init = false;
 static int crng_init_cnt = 0;
 static unsigned long crng_global_init_time = 0;
 #define CRNG_INIT_CNT_THRESH (2*CHACHA_KEY_SIZE)
-static void _extract_crng(struct crng_state *crng, __u8 out[CHACHA_BLOCK_SIZE]);
+static void _extract_crng(struct crng_state *crng,
+			  __u32 out[CHACHA_BLOCK_WORDS]);
 static void _crng_backtrack_protect(struct crng_state *crng,
-				    __u8 tmp[CHACHA_BLOCK_SIZE], int used);
+				    __u32 tmp[CHACHA_BLOCK_WORDS], int used);
 static void process_random_ready_list(void);
 static void _get_random_bytes(void *buf, int nbytes);
 
@@ -755,7 +753,7 @@ static int credit_entropy_bits_safe(struct entropy_store *r, int nbits)
 
 /*********************************************************************
  *
- * CRNG using CHACHA20
+ * CRNG using CHACHA
  *
  *********************************************************************/
 
@@ -999,7 +997,7 @@ static void crng_reseed(struct crng_state *crng, struct entropy_store *r)
 	unsigned long	flags;
 	int		i, num;
 	union {
-		__u8	block[CHACHA_BLOCK_SIZE];
+		__u32	block[CHACHA_BLOCK_WORDS];
 		__u32	key[8];
 	} buf;
 
@@ -1027,7 +1025,7 @@ static void crng_reseed(struct crng_state *crng, struct entropy_store *r)
 }
 
 static void _extract_crng(struct crng_state *crng,
-			  __u8 out[CHACHA_BLOCK_SIZE])
+			  __u32 out[CHACHA_BLOCK_WORDS])
 {
 	unsigned long v, flags, init_time;
 
@@ -1047,7 +1045,7 @@ static void _extract_crng(struct crng_state *crng,
 	spin_unlock_irqrestore(&crng->lock, flags);
 }
 
-static void extract_crng(__u8 out[CHACHA_BLOCK_SIZE])
+static void extract_crng(__u32 out[CHACHA_BLOCK_WORDS])
 {
 	_extract_crng(select_crng(), out);
 }
@@ -1057,7 +1055,7 @@ static void extract_crng(__u8 out[CHACHA_BLOCK_SIZE])
  * enough) to mutate the CRNG key to provide backtracking protection.
  */
 static void _crng_backtrack_protect(struct crng_state *crng,
-				    __u8 tmp[CHACHA_BLOCK_SIZE], int used)
+				    __u32 tmp[CHACHA_BLOCK_WORDS], int used)
 {
 	unsigned long	flags;
 	__u32		*s, *d;
@@ -1069,14 +1067,14 @@ static void _crng_backtrack_protect(struct crng_state *crng,
 		used = 0;
 	}
 	spin_lock_irqsave(&crng->lock, flags);
-	s = (__u32 *) &tmp[used];
+	s = &tmp[used / sizeof(__u32)];
 	d = &crng->state[4];
 	for (i=0; i < 8; i++)
 		*d++ ^= *s++;
 	spin_unlock_irqrestore(&crng->lock, flags);
 }
 
-static void crng_backtrack_protect(__u8 tmp[CHACHA_BLOCK_SIZE], int used)
+static void crng_backtrack_protect(__u32 tmp[CHACHA_BLOCK_WORDS], int used)
 {
 	_crng_backtrack_protect(select_crng(), tmp, used);
 }
@@ -1084,7 +1082,7 @@ static void crng_backtrack_protect(__u8 tmp[CHACHA_BLOCK_SIZE], int used)
 static ssize_t extract_crng_user(void __user *buf, size_t nbytes)
 {
 	ssize_t ret = 0, i = CHACHA_BLOCK_SIZE;
-	__u8 tmp[CHACHA_BLOCK_SIZE] __aligned(4);
+	__u32 tmp[CHACHA_BLOCK_WORDS];
 	int large_request = (nbytes > 256);
 
 	while (nbytes) {
@@ -1396,56 +1394,49 @@ retry:
  */
 static void extract_buf(struct entropy_store *r, __u8 *out)
 {
-	int i;
-	union {
-		__u32 w[5];
-		unsigned long l[LONGS(20)];
-	} hash;
-	__u32 workspace[SHA_WORKSPACE_WORDS];
+	struct blake2s_state state __aligned(__alignof__(unsigned long));
+	u8 hash[BLAKE2S_HASH_SIZE];
+	unsigned long *salt;
 	unsigned long flags;
+
+	blake2s_init(&state, sizeof(hash));
 
 	/*
 	 * If we have an architectural hardware random number
-	 * generator, use it for SHA's initial vector
+	 * generator, use it for BLAKE2's salt & personal fields.
 	 */
-	sha_init(hash.w);
-	for (i = 0; i < LONGS(20); i++) {
+	for (salt = (unsigned long *)&state.h[4];
+	     salt < (unsigned long *)&state.h[8]; ++salt) {
 		unsigned long v;
 		if (!arch_get_random_long(&v))
 			break;
-		hash.l[i] = v;
+		*salt ^= v;
 	}
 
-	/* Generate a hash across the pool, 16 words (512 bits) at a time */
+	/* Generate a hash across the pool */
 	spin_lock_irqsave(&r->lock, flags);
-	for (i = 0; i < r->poolinfo->poolwords; i += 16)
-		sha_transform(hash.w, (__u8 *)(r->pool + i), workspace);
+	blake2s_update(&state, (const u8 *)r->pool,
+		       r->poolinfo->poolwords * sizeof(*r->pool));
+	blake2s_final(&state, hash); /* final zeros out state */
 
 	/*
 	 * We mix the hash back into the pool to prevent backtracking
 	 * attacks (where the attacker knows the state of the pool
 	 * plus the current outputs, and attempts to find previous
-	 * ouputs), unless the hash function can be inverted. By
-	 * mixing at least a SHA1 worth of hash data back, we make
+	 * outputs), unless the hash function can be inverted. By
+	 * mixing at least a hash worth of hash data back, we make
 	 * brute-forcing the feedback as hard as brute-forcing the
 	 * hash.
 	 */
-	__mix_pool_bytes(r, hash.w, sizeof(hash.w));
+	__mix_pool_bytes(r, hash, sizeof(hash));
 	spin_unlock_irqrestore(&r->lock, flags);
 
-	memzero_explicit(workspace, sizeof(workspace));
-
-	/*
-	 * In case the hash function has some recognizable output
-	 * pattern, we fold it in half. Thus, we always feed back
-	 * twice as much data as we output.
+	/* Note that EXTRACT_SIZE is half of hash size here, because above
+	 * we've dumped the full length back into mixer. By reducing the
+	 * amount that we emit, we retain a level of forward secrecy.
 	 */
-	hash.w[0] ^= hash.w[3];
-	hash.w[1] ^= hash.w[4];
-	hash.w[2] ^= rol32(hash.w[2], 16);
-
-	memcpy(out, &hash, EXTRACT_SIZE);
-	memzero_explicit(&hash, sizeof(hash));
+	memcpy(out, hash, EXTRACT_SIZE);
+	memzero_explicit(hash, sizeof(hash));
 }
 
 static ssize_t _extract_entropy(struct entropy_store *r, void *buf,
@@ -1552,7 +1543,7 @@ static void _warn_unseeded_randomness(const char *func_name, void *caller,
  */
 static void _get_random_bytes(void *buf, int nbytes)
 {
-	__u8 tmp[CHACHA_BLOCK_SIZE] __aligned(4);
+	__u32 tmp[CHACHA_BLOCK_WORDS];
 
 	trace_get_random_bytes(nbytes, _RET_IP_);
 
@@ -2143,7 +2134,7 @@ u64 get_random_u64(void)
 	batch = raw_cpu_ptr(&batched_entropy_u64);
 	spin_lock_irqsave(&batch->batch_lock, flags);
 	if (batch->position % ARRAY_SIZE(batch->entropy_u64) == 0) {
-		extract_crng((u8 *)batch->entropy_u64);
+		extract_crng((__u32 *)batch->entropy_u64);
 		batch->position = 0;
 	}
 	ret = batch->entropy_u64[batch->position++];
@@ -2167,7 +2158,7 @@ u32 get_random_u32(void)
 	batch = raw_cpu_ptr(&batched_entropy_u32);
 	spin_lock_irqsave(&batch->batch_lock, flags);
 	if (batch->position % ARRAY_SIZE(batch->entropy_u32) == 0) {
-		extract_crng((u8 *)batch->entropy_u32);
+		extract_crng(batch->entropy_u32);
 		batch->position = 0;
 	}
 	ret = batch->entropy_u32[batch->position++];
