@@ -1152,6 +1152,23 @@ static int __cam_req_mgr_check_sync_req_is_ready(
 		 * event of sync link is skipped, so we also need to
 		 * skip this SOF event.
 		 */
+
+        /* LGE_CHANGE_S, Fix half FPS in front outfocus, hyungtae.lee@lge.com */
+         /*
+         * It could happen timing issue not in case of master-slave mode.
+         * so we should consider 'req_id = sync_req_id' as that both of links
+         * are in sync not in order to skip requests and make FPS half than
+         * we expect.
+         */
+        #if 0 //QCT_ORIGINAL
+	if (req_id >= sync_req_id) {
+        #else
+        if (req_id > sync_req_id) {
+	#endif
+			CAM_DBG(CAM_CRM,
+				"Timing issue, the sof event of link %x is delayed",
+				link->link_hdl);
+				
 		if (req_id > sync_req_id) {
 			CAM_INFO(CAM_CRM,
 				"Timing issue, the sof event delayed of link %x sof ts:0x%x sync link handle:0x%x sync sof:0x%x req:%lld sync reqid:%lld",
@@ -1163,6 +1180,7 @@ static int __cam_req_mgr_check_sync_req_is_ready(
 				sync_req_id);
 			return -EAGAIN;
 		}
+        /* LGE_CHANGE_E, Fix half FPS in front outfocus, hyungtae.lee@lge.com */
 	}
 
 	CAM_DBG(CAM_REQ,
