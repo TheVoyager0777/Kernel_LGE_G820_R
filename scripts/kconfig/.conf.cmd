@@ -1,1 +1,0 @@
-cmd_scripts/kconfig/conf := /home01/ranga.sr/LMG820N_harsha/android/prebuilts/clang/host/linux-x86/clang-r383902b1/bin/clang  -o scripts/kconfig/conf scripts/kconfig/conf.o scripts/kconfig/zconf.tab.o  
