@@ -480,7 +480,6 @@ static void tcp_v6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 			goto out;
 
 		WRITE_ONCE(tp->mtu_info, mtu);
-
 #ifdef CONFIG_LGP_DATA_TCPIP_MPTCP
 		if (!sock_owned_by_user(meta_sk)) {
 			tcp_v6_mtu_reduced(sk);
@@ -1818,6 +1817,7 @@ process:
 	bh_unlock_sock(meta_sk);
 
 #else
+	sk_defer_free_flush(sk);
 	bh_lock_sock_nested(sk);
 	tcp_segs_in(tcp_sk(sk), skb);
 	ret = 0;

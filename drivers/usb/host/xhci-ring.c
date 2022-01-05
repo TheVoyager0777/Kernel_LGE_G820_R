@@ -350,22 +350,16 @@ static void xhci_handle_stopped_cmd_ring(struct xhci_hcd *xhci,
 /* Must be called with xhci->lock held, releases and aquires lock back */
 static int xhci_abort_cmd_ring(struct xhci_hcd *xhci, unsigned long flags)
 {
-	u32 temp_32;
+	u64 temp_64;
 	int ret;
 
 	xhci_dbg(xhci, "Abort command ring\n");
 
 	reinit_completion(&xhci->cmd_ring_stop_completion);
 
-	/*
-	 * The control bits like command stop, abort are located in lower
-	 * dword of the command ring control register. Limit the write
-	 * to the lower dword to avoid corrupting the command ring pointer
-	 * in case if the command ring is stopped by the time upper dword
-	 * is written.
-	 */
-	temp_32 = readl(&xhci->op_regs->cmd_ring);
-	writel(temp_32 | CMD_RING_ABORT, &xhci->op_regs->cmd_ring);
+	temp_64 = xhci_read_64(xhci, &xhci->op_regs->cmd_ring);
+	xhci_write_64(xhci, temp_64 | CMD_RING_ABORT,
+			&xhci->op_regs->cmd_ring);
 
 	/* Section 4.6.1.2 of xHCI 1.0 spec says software should also time the
 	 * completion of the Command Abort operation. If CRR is not negated in a
@@ -2917,7 +2911,7 @@ irqreturn_t xhci_irq(struct usb_hcd *hcd)
 	 * that clears the EHB.
 	 */
 	while (xhci_handle_event(xhci) > 0) {
-		if (event_loop++ < TRBS_PER_SEGMENT / 2)
+		if (event_loop++ < TRBS_PER_SEGMENT / 16)
 			continue;
 		xhci_update_erst_dequeue(xhci, event_ring_deq);
 		event_loop = 0;

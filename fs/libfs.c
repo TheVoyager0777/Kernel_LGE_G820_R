@@ -1227,15 +1227,13 @@ bool is_empty_dir_inode(struct inode *inode)
 }
 
 #ifdef CONFIG_UNICODE
-/*
- * Determine if the name of a dentry should be casefolded.
- *
- * Return: if names will need casefolding
- */
-static bool needs_casefold(const struct inode *dir)
+bool needs_casefold(const struct inode *dir)
 {
-	return IS_CASEFOLDED(dir) && dir->i_sb->s_encoding;
+	return IS_CASEFOLDED(dir) && dir->i_sb->s_encoding &&
+			(!IS_ENCRYPTED(dir) || fscrypt_has_encryption_key(dir));
 }
+EXPORT_SYMBOL(needs_casefold);
+
 /**
  * generic_ci_d_compare - generic d_compare implementation for casefolding filesystems
  * @dentry:	dentry whose name we are checking against
@@ -1249,7 +1247,7 @@ static int generic_ci_d_compare(const struct dentry *dentry, unsigned int len,
 				const char *str, const struct qstr *name)
 {
 	const struct dentry *parent = READ_ONCE(dentry->d_parent);
-	const struct inode dir = READ_ONCE(parent->d_inode);
+	const struct inode *dir = READ_ONCE(parent->d_inode);
 	const struct super_block *sb = dentry->d_sb;
 	const struct unicode_map *um = sb->s_encoding;
 	struct qstr qstr = QSTR_INIT(str, len);
@@ -1299,12 +1297,12 @@ static int generic_ci_d_hash(const struct dentry *dentry, struct qstr *str)
 	const struct unicode_map *um = sb->s_encoding;
 	int ret = 0;
 
-	if (!inode || !needs_casefold(inode))
+	if (!dir || !needs_casefold(dir))
 		return 0;
 
 	ret = utf8_casefold_hash(um, dentry, str);
 	if (ret < 0 && sb_has_strict_encoding(sb))
-		return -EINVAL; 
+		return -EINVAL;
 	return 0;
 }
 

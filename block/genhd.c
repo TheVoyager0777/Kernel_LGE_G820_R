@@ -45,6 +45,28 @@ static void disk_add_events(struct gendisk *disk);
 static void disk_del_events(struct gendisk *disk);
 static void disk_release_events(struct gendisk *disk);
 
+/*
+ * Set disk capacity and notify if the size is not currently zero and will not
+ * be set to zero. Returns true if a uevent was sent, otherwise false.
+ */
+bool set_capacity_and_notify(struct gendisk *disk, sector_t size)
+{
+	sector_t capacity = get_capacity(disk);
+
+	set_capacity(disk, size);
+
+	if (capacity != size && capacity != 0 && size != 0) {
+		char *envp[] = { "RESIZE=1", NULL };
+
+		kobject_uevent_env(&disk_to_dev(disk)->kobj, KOBJ_CHANGE, envp);
+		return true;
+	}
+
+	return false;
+}
+
+EXPORT_SYMBOL_GPL(set_capacity_and_notify);
+
 void part_inc_in_flight(struct request_queue *q, struct hd_struct *part, int rw)
 {
 	if (q->mq_ops)
@@ -1755,11 +1777,6 @@ static void disk_check_events(struct disk_events *ev,
 	unsigned long intv;
 	int nr_events = 0, i;
 
-#ifdef CONFIG_USB_HOST_NOTIFY
-	events = 0;
-
-	if (disk->interfaces != GENHD_IF_USB)
-#endif
 	/* check events */
 	events = disk->fops->check_events(disk, clearing);
 
@@ -1786,9 +1803,6 @@ static void disk_check_events(struct disk_events *ev,
 		if (events & disk->events & (1 << i))
 			envp[nr_events++] = disk_uevents[i];
 
-#ifdef CONFIG_USB_HOST_NOTIFY
-	if (disk->interfaces != GENHD_IF_USB)
-#endif
 	if (nr_events)
 		kobject_uevent_env(&disk_to_dev(disk)->kobj, KOBJ_CHANGE, envp);
 }

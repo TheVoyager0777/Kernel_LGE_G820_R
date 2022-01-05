@@ -2128,7 +2128,7 @@ bail:
 
 static int fastrpc_mmap_remove_pdr(struct fastrpc_file *fl);
 static int fastrpc_channel_open(struct fastrpc_file *fl);
-static int fastrpc_mmap_remove_ssr(struct fastrpc_file *fl, int locked);
+static int fastrpc_mmap_remove_ssr(struct fastrpc_file *fl);
 static int fastrpc_init_process(struct fastrpc_file *fl,
 				struct fastrpc_ioctl_init_attrs *uproc)
 {
@@ -2394,11 +2394,10 @@ static int fastrpc_kstat(const char *filename, struct kstat *stat)
 }
 
 static int fastrpc_get_info_from_dsp(struct fastrpc_file *fl,
-				uint32_t *dsp_attr_buf,
-				uint32_t dsp_attr_buf_len,
+				uint32_t *dsp_attr, uint32_t dsp_attr_size,
 				uint32_t domain)
 {
-	int err = 0, dsp_support = 0;
+	int err = 0, dsp_cap_buff_size, dsp_support = 0;
 	struct fastrpc_ioctl_invoke_crc ioctl;
 	remote_arg_t ra[2];
 	struct kstat sb;
@@ -2424,7 +2423,7 @@ static int fastrpc_get_info_from_dsp(struct fastrpc_file *fl,
 		dsp_support = 0;
 		break;
 	}
-	dsp_attr_buf[0] = dsp_support;
+	dsp_attr[0] = dsp_support;
 
 	if (dsp_support == 0)
 		goto bail;
@@ -2433,10 +2432,11 @@ static int fastrpc_get_info_from_dsp(struct fastrpc_file *fl,
 	if (err)
 		goto bail;
 
-	ra[0].buf.pv = (void *)&dsp_attr_buf_len;
-	ra[0].buf.len = sizeof(dsp_attr_buf_len);
-	ra[1].buf.pv = (void *)(&dsp_attr_buf[1]);
-	ra[1].buf.len = dsp_attr_buf_len * sizeof(uint32_t);
+	dsp_cap_buff_size = dsp_attr_size - sizeof(uint32_t);
+	ra[0].buf.pv = (void *)&dsp_cap_buff_size;
+	ra[0].buf.len = sizeof(dsp_cap_buff_size);
+	ra[1].buf.pv = (void *)(&dsp_attr[1]);
+	ra[1].buf.len = dsp_cap_buff_size * sizeof(uint32_t);
 	ioctl.inv.handle = FASTRPC_STATIC_HANDLE_DSP_UTILITIES;
 	ioctl.inv.sc = REMOTE_SCALARS_MAKE(0, 1, 1);
 	ioctl.inv.pra = ra;
@@ -2468,7 +2468,7 @@ static int fastrpc_get_info_from_kernel(
 		 * and cache on kernel
 		 */
 		err = fastrpc_get_info_from_dsp(fl, dsp_cap->dsp_attributes,
-				FASTRPC_MAX_DSP_ATTRIBUTES - 1,
+				sizeof(dsp_cap->dsp_attributes),
 				domain);
 		if (err)
 			goto bail;
@@ -2618,7 +2618,7 @@ bail:
 }
 
 static int fastrpc_munmap_on_dsp_rh(struct fastrpc_file *fl, uint64_t phys,
-				size_t size, uint32_t flags, int locked)
+						size_t size, uint32_t flags)
 {
 	int err = 0;
 	struct fastrpc_apps *me = &gfa;
@@ -2630,14 +2630,12 @@ static int fastrpc_munmap_on_dsp_rh(struct fastrpc_file *fl, uint64_t phys,
 		struct fastrpc_ioctl_invoke_crc ioctl;
 		struct scm_desc desc = {0};
 		remote_arg_t ra[2];
-		int cid = 0;
 		struct {
 			uint8_t skey;
 		} routargs;
 
 		if (fl == NULL)
 			goto bail;
-		cid = fl->cid;
 		tgid = fl->tgid;
 		ra[0].buf.pv = (void *)&tgid;
 		ra[0].buf.len = sizeof(tgid);
@@ -2652,16 +2650,8 @@ static int fastrpc_munmap_on_dsp_rh(struct fastrpc_file *fl, uint64_t phys,
 		ioctl.attrs = NULL;
 		ioctl.crc = NULL;
 
-		if (locked) {
-			mutex_unlock(&fl->map_mutex);
-			mutex_unlock(&me->channel[cid].smd_mutex);
-		}
 		VERIFY(err, 0 == (err = fastrpc_internal_invoke(fl,
 				FASTRPC_MODE_PARALLEL, 1, &ioctl)));
-		if (locked) {
-			mutex_lock(&me->channel[cid].smd_mutex);
-			mutex_lock(&fl->map_mutex);
-		}
 		if (err)
 			goto bail;
 		desc.args[0] = TZ_PIL_AUTH_QDSP6_PROC;
@@ -2721,8 +2711,7 @@ static int fastrpc_munmap_on_dsp(struct fastrpc_file *fl, uintptr_t raddr,
 		goto bail;
 	if (flags == ADSP_MMAP_HEAP_ADDR ||
 				flags == ADSP_MMAP_REMOTE_HEAP_ADDR) {
-		VERIFY(err, !fastrpc_munmap_on_dsp_rh(fl, phys, size, flags,
-							0));
+		VERIFY(err, !fastrpc_munmap_on_dsp_rh(fl, phys, size, flags));
 		if (err)
 			goto bail;
 	}
@@ -2730,7 +2719,7 @@ bail:
 	return err;
 }
 
-static int fastrpc_mmap_remove_ssr(struct fastrpc_file *fl, int locked)
+static int fastrpc_mmap_remove_ssr(struct fastrpc_file *fl)
 {
 	struct fastrpc_mmap *match = NULL, *map = NULL;
 	struct hlist_node *n = NULL;
@@ -2750,7 +2739,7 @@ static int fastrpc_mmap_remove_ssr(struct fastrpc_file *fl, int locked)
 
 		if (match) {
 			VERIFY(err, !fastrpc_munmap_on_dsp_rh(fl, match->phys,
-					match->size, match->flags, locked));
+						match->size, match->flags));
 			if (err)
 				goto bail;
 			if (me->channel[0].ramdumpenabled) {
@@ -2795,7 +2784,7 @@ static int fastrpc_mmap_remove_pdr(struct fastrpc_file *fl)
 	}
 	if (me->channel[fl->cid].spd[session].pdrcount !=
 		me->channel[fl->cid].spd[session].prevpdrcount) {
-		if (fastrpc_mmap_remove_ssr(fl, 0))
+		if (fastrpc_mmap_remove_ssr(fl))
 			pr_err("ADSPRPC: SSR: Failed to unmap remote heap\n");
 		me->channel[fl->cid].spd[session].prevpdrcount =
 				me->channel[fl->cid].spd[session].pdrcount;
@@ -3526,7 +3515,7 @@ static int fastrpc_channel_open(struct fastrpc_file *fl)
 	if (cid == ADSP_DOMAIN_ID && me->channel[cid].ssrcount !=
 			 me->channel[cid].prevssrcount) {
 		mutex_lock(&fl->map_mutex);
-		if (fastrpc_mmap_remove_ssr(fl, 1))
+		if (fastrpc_mmap_remove_ssr(fl))
 			pr_err("adsprpc: %s: SSR: Failed to unmap remote heap for %s\n",
 				__func__, me->channel[cid].name);
 		mutex_unlock(&fl->map_mutex);
@@ -3781,8 +3770,7 @@ static int fastrpc_getperf(struct fastrpc_ioctl_perf *ioctl_perf,
 
 		if (fperf) {
 			K_COPY_TO_USER(err, 0, (void *)ioctl_perf->data,
-				fperf, sizeof(*fperf) -
-				sizeof(struct hlist_node));
+				fperf, sizeof(*fperf));
 		}
 	}
 	K_COPY_TO_USER(err, 0, param, ioctl_perf, sizeof(*ioctl_perf));

@@ -3077,8 +3077,8 @@ static int ext4_run_li_request(struct ext4_li_request *elr)
 	struct ext4_group_desc *gdp = NULL;
 	ext4_group_t group, ngroups;
 	struct super_block *sb;
+	unsigned long timeout = 0;
 	int ret = 0;
-	u64 start_time;
 
 	sb = elr->lr_super;
 	ngroups = EXT4_SB(sb)->s_groups_count;
@@ -3098,12 +3098,13 @@ static int ext4_run_li_request(struct ext4_li_request *elr)
 		ret = 1;
 
 	if (!ret) {
-		start_time = ktime_get_real_ns();
+		timeout = jiffies;
 		ret = ext4_init_inode_table(sb, group,
 					    elr->lr_timeout ? 0 : 1);
 		if (elr->lr_timeout == 0) {
-			elr->lr_timeout = nsecs_to_jiffies((ktime_get_real_ns() - start_time) *
-				  elr->lr_sbi->s_li_wait_mult);
+			timeout = (jiffies - timeout) *
+				  elr->lr_sbi->s_li_wait_mult;
+			elr->lr_timeout = timeout;
 		}
 		elr->lr_next_sched = jiffies + elr->lr_timeout;
 		elr->lr_next_group = group + 1;
@@ -5078,7 +5079,7 @@ static int ext4_commit_super(struct super_block *sb, int sync)
 		return -EINVAL;
 	if (block_device_ejected(sb))
 		return -ENODEV;
-		
+
 	/*
 	 * If the file system is mounted read-only, don't update the
 	 * superblock write time.  This avoids updating the superblock

@@ -147,8 +147,8 @@ struct lzma_dec {
 
 	/*
 	 * LZMA properties or related bit masks (number of literal
-	 * context bits, a mask dervied from the number of literal
-	 * position bits, and a mask dervied from the number
+	 * context bits, a mask derived from the number of literal
+	 * position bits, and a mask derived from the number
 	 * position bits)
 	 */
 	uint32_t lc;
@@ -387,14 +387,7 @@ static void dict_uncompressed(struct dictionary *dict, struct xz_buf *b,
 
 		*left -= copy_size;
 
-		/*
-		 * If doing in-place decompression in single-call mode and the
-		 * uncompressed size of the file is larger than the caller
-		 * thought (i.e. it is invalid input!), the buffers below may
-		 * overlap and cause undefined behavior with memcpy().
-		 * With valid inputs memcpy() would be fine here.
-		 */
-		memmove(dict->buf + dict->pos, b->in + b->in_pos, copy_size);
+		memcpy(dict->buf + dict->pos, b->in + b->in_pos, copy_size);
 		dict->pos += copy_size;
 
 		if (dict->full < dict->pos)
@@ -404,11 +397,7 @@ static void dict_uncompressed(struct dictionary *dict, struct xz_buf *b,
 			if (dict->pos == dict->end)
 				dict->pos = 0;
 
-			/*
-			 * Like above but for multi-call mode: use memmove()
-			 * to avoid undefined behavior with invalid input.
-			 */
-			memmove(b->out + b->out_pos, b->in + b->in_pos,
+			memcpy(b->out + b->out_pos, b->in + b->in_pos,
 					copy_size);
 		}
 
@@ -432,12 +421,6 @@ static uint32_t dict_flush(struct dictionary *dict, struct xz_buf *b)
 		if (dict->pos == dict->end)
 			dict->pos = 0;
 
-		/*
-		 * These buffers cannot overlap even if doing in-place
-		 * decompression because in multi-call mode dict->buf
-		 * has been allocated by us in this file; it's not
-		 * provided by the caller like in single-call mode.
-		 */
 		memcpy(b->out + b->out_pos, dict->buf + dict->start,
 				copy_size);
 	}
@@ -501,7 +484,7 @@ static __always_inline void rc_normalize(struct rc_dec *rc)
 }
 
 /*
- * Decode one bit. In some versions, this function has been splitted in three
+ * Decode one bit. In some versions, this function has been split in three
  * functions so that the compiler is supposed to be able to more easily avoid
  * an extra branch. In this particular version of the LZMA decoder, this
  * doesn't seem to be a good idea (tested with GCC 3.3.6, 3.4.6, and 4.3.3
@@ -778,7 +761,7 @@ static bool lzma_main(struct xz_dec_lzma2 *s)
 }
 
 /*
- * Reset the LZMA decoder and range decoder state. Dictionary is nore reset
+ * Reset the LZMA decoder and range decoder state. Dictionary is not reset
  * here, because LZMA state may be reset without resetting the dictionary.
  */
 static void lzma_reset(struct xz_dec_lzma2 *s)

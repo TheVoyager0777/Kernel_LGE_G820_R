@@ -882,7 +882,7 @@ static void dwc3_remove_requests(struct dwc3 *dwc, struct dwc3_ep *dep)
 	if (ret)
 		return;
 
-	if (dep->number == 1 && dwc->ep0state != EP0_SETUP_PHASE) {
+	if (dep->number == 0 && dwc->ep0state != EP0_SETUP_PHASE) {
 		unsigned int dir;
 
 		dbg_log_string("CTRLPEND(%d)", dwc->ep0state);
@@ -1990,10 +1990,9 @@ static int dwc3_gadget_wakeup_int(struct dwc3 *dwc)
 	case DWC3_LINK_STATE_RESET:
 	case DWC3_LINK_STATE_RX_DET:	/* in HS, means Early Suspend */
 	case DWC3_LINK_STATE_U3:	/* in HS, means SUSPEND */
-	case DWC3_LINK_STATE_U2:	/* in HS, means Sleep (L1) */
-	case DWC3_LINK_STATE_U1:
 	case DWC3_LINK_STATE_RESUME:
 		break;
+	case DWC3_LINK_STATE_U1:
 		if (dwc->gadget.speed < USB_SPEED_SUPER) {
 			link_recover_only = true;
 			break;
@@ -2885,7 +2884,8 @@ static int __dwc3_cleanup_done_trbs(struct dwc3 *dwc, struct dwc3_ep *dep,
 	 */
 	if ((req->zero || req->unaligned) && !(trb->ctrl & DWC3_TRB_CTRL_CHN)) {
 		trb->ctrl &= ~DWC3_TRB_CTRL_HWO;
-		return 1;
+		return (((event->status & DEPEVT_STATUS_IOC) &&
+				(trb->ctrl & DWC3_TRB_CTRL_IOC)) ? 1 : 0);
 	}
 
 	count = trb->size & DWC3_TRB_SIZE_MASK;

@@ -1,31 +1,37 @@
 #!/bin/bash
 
-echo
-echo "Clean Build Directory"
-echo 
+yellow='\033[0;33m'
+white='\033[0m'
+red='\033[0;31m'
+gre='\e[0;32m'
 
-make clean && make mrproper
-
-echo
-echo "Issue Build Commands"
-echo
-
-mkdir -p out
+ANYKERNEL3_DIR=$PWD/AnyKernel3
+FINAL_KERNEL_ZIP=kernel-Tucana-r-VoyagerIII-$(git rev-parse --short=7 HEAD).zip
+IMAGE_GZ=$PWD/out/arch/arm64/boot/Image.gz
+ccache_=`which ccache`
 export ARCH=arm64
 export SUBARCH=arm64
-export CLANG_PATH=~/workspace/proton-clang/bin
-export PATH=${CLANG_PATH}:${PATH}
-export CROSS_COMPILE=aarch64-linux-gnu-
-export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+export HEADER_ARCH=arm64
+export CLANG_PATH=
 
-echo
-echo "Set DEFCONFIG"
-echo 
-make CC=clang AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip O=out vendor/dragon_alpha_defconfig
+export KBUILD_BUILD_HOST="Voayger-sever"
+export KBUILD_BUILD_USER="TheVoyager"
 
-echo
-echo "Build The Good Stuff"
-echo 
+# make mrproper O=out || exit 1
+make dragon_alpha_defconfig O=out || exit 1
 
-make CC=clang AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip O=out -j24
-cp -f ./out/arch/arm64/boot/Image.gz-dtb ./release/Dragon/Image.gz-dtb
+Start=$(date +"%s")
+
+make -j$(nproc --all) \
+	O=out \
+	CC="${ccache_} /home/user/桌面/123/gcl/linux-x86-refs_heads_master/clang-r437112/bin/clang" \
+	CLANG_TRIPLE=/home/user/桌面/123/cbl/bin/aarch64-linux-gnu- \
+	CROSS_COMPILE=/home/user/桌面/123/cbl/bin/aarch64-linux-gnu- \
+	CROSS_COMPILE_ARM32=/home/user/桌面/123/cbl/bin/arm-linux-gnueabi- || > build.log
+
+exit_code=$?
+End=$(date +"%s")
+Diff=$(($End - $Start))
+
+echo -e "$gre << Build completed in $(($Diff / 60)) minutes and $(($Diff % 60)) seconds >> \n $white"
+

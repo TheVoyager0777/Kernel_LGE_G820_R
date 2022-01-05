@@ -130,7 +130,10 @@ kernel/configs/android-*.cfg
 #Ignoring Android.bp link file
 #
 Android.bp
+<<<<<<< HEAD
 
 
 out
 release
+=======
+>>>>>>> 8dcc1922ac22a69f51f94e3d260c9fd1d1d9da7e

@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2009-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -5138,15 +5138,6 @@ int sde_dbg_debugfs_register(struct device *dev)
 }
 #endif
 
-#else
-
-int sde_dbg_debugfs_register(struct device *dev)
-{
-	return 0;
-}
-
-#endif
-
 static void _sde_dbg_debugfs_destroy(void)
 {
 }
@@ -5168,8 +5159,6 @@ void sde_dbg_init_dbg_buses(u32 hwversion)
 		dbg->dbgbus_vbif_rt.entries = vbif_dbg_bus_msm8998;
 		dbg->dbgbus_vbif_rt.cmn.entries_size =
 				ARRAY_SIZE(vbif_dbg_bus_msm8998);
-		dbg->dbgbus_vbif_rt.cmn.name = DBGBUS_NAME_VBIF_RT;
-		dbg->dbgbus_vbif_rt.cmn.enable_mask = DEFAULT_DBGBUS_VBIFRT;
 		dbg->dbgbus_dsi.entries = NULL;
 		dbg->dbgbus_dsi.size = 0;
 		dbg->dbgbus_vbif_rt.cmn.name = DBGBUS_NAME_VBIF_RT;
@@ -5186,8 +5175,6 @@ void sde_dbg_init_dbg_buses(u32 hwversion)
 		dbg->dbgbus_vbif_rt.entries = vbif_dbg_bus_msm8998;
 		dbg->dbgbus_vbif_rt.cmn.entries_size =
 				ARRAY_SIZE(vbif_dbg_bus_msm8998);
-		dbg->dbgbus_vbif_rt.cmn.name = DBGBUS_NAME_VBIF_RT;
-		dbg->dbgbus_vbif_rt.cmn.enable_mask = DEFAULT_DBGBUS_VBIFRT;
 		dbg->dbgbus_dsi.entries = dsi_dbg_bus_sdm845;
 		dbg->dbgbus_dsi.size = ARRAY_SIZE(dsi_dbg_bus_sdm845);
 		dbg->dbgbus_vbif_rt.cmn.name = DBGBUS_NAME_VBIF_RT;

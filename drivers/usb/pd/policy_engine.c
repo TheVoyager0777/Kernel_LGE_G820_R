@@ -461,6 +461,10 @@ static void *usbpd_ipc_log;
 #define ID_HDR_PRODUCT_AMA	5
 #define ID_HDR_PRODUCT_VPD	6
 
+/* params for usb_blocking_sync */
+#define STOP_USB_HOST		0
+#define START_USB_HOST		1
+
 static bool check_vsafe0v = true;
 module_param(check_vsafe0v, bool, 0600);
 
@@ -857,7 +861,7 @@ static void restart_usb_host_work(struct work_struct *w)
 	stop_usb_host(pd);
 
 	/* blocks until USB host is completely stopped */
-	ret = extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, 0);
+	ret = extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, STOP_USB_HOST);
 	if (ret) {
 		usbpd_err(&pd->dev, "err(%d) stopping host", ret);
 		return;
@@ -906,7 +910,7 @@ static int usbpd_release_ss_lane(struct usbpd *pd,
 	stop_usb_host(pd);
 
 	/* blocks until USB host is completely stopped */
-	ret = extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, 0);
+	ret = extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, STOP_USB_HOST);
 	if (ret) {
 		usbpd_err(&pd->dev, "err(%d) stopping host", ret);
 		goto err_exit;
@@ -3024,7 +3028,8 @@ static void dr_swap(struct usbpd *pd)
 					   LGE_SBU_SWITCH_FLAG_SBU_AUX);
 #endif
 		/* ensure host is started before allowing DP */
-		extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, 0);
+		extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST,
+					START_USB_HOST);
 
 		usbpd_send_svdm(pd, USBPD_SID, USBPD_SVDM_DISCOVER_IDENTITY,
 				SVDM_CMD_TYPE_INITIATOR, 0, NULL, 0);

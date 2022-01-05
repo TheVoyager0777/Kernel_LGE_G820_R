@@ -235,11 +235,7 @@ static int uart_port_startup(struct tty_struct *tty, struct uart_state *state,
 	if (retval == 0) {
 		if (uart_console(uport) && uport->cons->cflag) {
 			tty->termios.c_cflag = uport->cons->cflag;
-			tty->termios.c_ispeed = uport->cons->ispeed;
-			tty->termios.c_ospeed = uport->cons->ospeed;
 			uport->cons->cflag = 0;
-			uport->cons->ispeed = 0;
-			uport->cons->ospeed = 0;
 		}
 		/*
 		 * Initialise the hardware port settings.
@@ -307,11 +303,8 @@ static void uart_shutdown(struct tty_struct *tty, struct uart_state *state)
 		/*
 		 * Turn off DTR and RTS early.
 		 */
-		if (uport && uart_console(uport) && tty) {
+		if (uport && uart_console(uport) && tty)
 			uport->cons->cflag = tty->termios.c_cflag;
-			uport->cons->ispeed = tty->termios.c_ispeed;
-			uport->cons->ospeed = tty->termios.c_ospeed;
-		}
 
 		if (!tty || C_HUPCL(tty))
 			uart_port_dtr_rts(uport, 0);
@@ -1453,10 +1446,6 @@ static void uart_set_ldisc(struct tty_struct *tty)
 {
 	struct uart_state *state = tty->driver_data;
 	struct uart_port *uport;
-	struct tty_port *port = &state->port;
-
-	if (!tty_port_initialized(port))
-		return;
 
 	mutex_lock(&state->port.mutex);
 	uport = uart_port_check(state);
@@ -2095,11 +2084,8 @@ uart_set_options(struct uart_port *port, struct console *co,
 	 * Allow the setting of the UART parameters with a NULL console
 	 * too:
 	 */
-	if (co) {
+	if (co)
 		co->cflag = termios.c_cflag;
-		co->ispeed = termios.c_ispeed;
-		co->ospeed = termios.c_ospeed;
-	}
 
 	return 0;
 }
@@ -2240,8 +2226,6 @@ int uart_resume_port(struct uart_driver *drv, struct uart_port *uport)
 		 */
 		memset(&termios, 0, sizeof(struct ktermios));
 		termios.c_cflag = uport->cons->cflag;
-		termios.c_ispeed = uport->cons->ispeed;
-		termios.c_ospeed = uport->cons->ospeed;
 
 		/*
 		 * If that's unset, use the tty termios setting.

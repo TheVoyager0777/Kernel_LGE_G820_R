@@ -629,7 +629,7 @@
 			alloc-ranges = <0 0x00000000 0 0xffffffff>;
 			reusable;
 			alignment = <0 0x400000>;
-			size = <0 0x8c00000>;
+			size = <0 0x5c00000>;
 		};
 
 		cont_splash_memory: cont_splash_region@9c000000 {
@@ -1117,6 +1117,7 @@
 
 	bluetooth: bt_wcn3990 {
 		compatible = "qca,wcn3990";
+		qca,bt-sw-ctrl-gpio = <&tlmm 73 0>; /* SW_CTRL */
 		qca,bt-vdd-io-supply = <&pm6150_l10>;
 		qca,bt-vdd-core-supply = <&pm6150l_l2>;
 		qca,bt-vdd-pa-supply = <&pm6150l_l10>;

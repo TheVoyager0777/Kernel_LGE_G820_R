@@ -5483,8 +5483,8 @@ static void tcp_check_urg(struct sock *sk, const struct tcphdr *th)
 		}
 	}
 
-	tp->urg_data = TCP_URG_NOTYET;
-	tp->urg_seq = ptr;
+	WRITE_ONCE(tp->urg_data, TCP_URG_NOTYET);
+	WRITE_ONCE(tp->urg_seq, ptr);
 
 	/* Disable header prediction. */
 	tp->pred_flags = 0;
@@ -5501,11 +5501,11 @@ static void tcp_urg(struct sock *sk, struct sk_buff *skb, const struct tcphdr *t
 #endif
 
 	/* Check if we get a new urgent pointer - normally not. */
-	if (th->urg)
+	if (unlikely(th->urg))
 		tcp_check_urg(sk, th);
 
 	/* Do we wait for any urgent data? - normally not... */
-	if (tp->urg_data == TCP_URG_NOTYET) {
+	if (unlikely(tp->urg_data == TCP_URG_NOTYET)) {
 		u32 ptr = tp->urg_seq - ntohl(th->seq) + (th->doff * 4) -
 			  th->syn;
 
@@ -5514,7 +5514,7 @@ static void tcp_urg(struct sock *sk, struct sk_buff *skb, const struct tcphdr *t
 			u8 tmp;
 			if (skb_copy_bits(skb, ptr, &tmp, 1))
 				BUG();
-			tp->urg_data = TCP_URG_VALID | tmp;
+			WRITE_ONCE(tp->urg_data, TCP_URG_VALID | tmp);
 			if (!sock_flag(sk, SOCK_DEAD))
 				sk->sk_data_ready(sk);
 		}
