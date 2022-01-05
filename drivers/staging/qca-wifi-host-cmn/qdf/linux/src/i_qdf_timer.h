@@ -51,7 +51,7 @@ struct __qdf_timer_t {
 	(qdf_timer_get_multiplier() * msecs_to_jiffies(msec))
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 999)
 static inline void __os_timer_shim(struct timer_list *os_timer)
 {
 	struct __qdf_timer_t *timer = from_timer(timer, os_timer, os_timer);

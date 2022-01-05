@@ -504,7 +504,7 @@ struct tee_mmu *tee_mmu_create(struct mm_struct *mm,
 #if KERNEL_VERSION(4, 15, 0) > LINUX_VERSION_CODE
 				release_pages(pages, gup_ret, 0);
 #else
-				release_pages(pages, gup_ret);
+				release_pages(pages, gup_ret, 0);
 #endif
 				ret = -EINVAL;
 				goto end;
