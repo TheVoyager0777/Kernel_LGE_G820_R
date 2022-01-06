@@ -533,6 +533,19 @@ static void *ion_dma_buf_vmap(struct dma_buf *dmabuf)
 static void ion_dma_buf_vunmap(struct dma_buf *dmabuf, void *vaddr)
 {
 	struct ion_buffer *buffer = dmabuf->priv;
+	void *vaddr;
+
+	if (!buffer->heap->ops->map_kernel) {
+		pr_err("%s: map kernel is not implemented by this heap.\n",
+		       __func__);
+		return ERR_PTR(-ENOTTY);
+	}
+	mutex_lock(&buffer->lock);
+	vaddr = ion_buffer_kmap_get(buffer);
+	mutex_unlock(&buffer->lock);
+
+	if (IS_ERR(vaddr))
+		return vaddr;
 
 	if (buffer->heap->ops->map_kernel) {
 		mutex_lock(&buffer->lock);
