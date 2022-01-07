@@ -84,6 +84,8 @@ struct dp_display {
 #if IS_ENABLED(CONFIG_LGE_COVER_DISPLAY)
 	struct extcon_dev *dd_extcon_sdev[EXT_DD_MAX_COUNT];
 #endif
+	bool is_bootsplash_en;
+
 	int (*enable)(struct dp_display *dp_display, void *panel);
 	int (*post_enable)(struct dp_display *dp_display, void *panel);
 
