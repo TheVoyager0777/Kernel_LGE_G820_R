@@ -3147,13 +3147,8 @@ static void _sde_crtc_clear_dim_layers_v1(struct sde_crtc_state *cstate)
  * @cstate:      Pointer to sde crtc state
  * @user_ptr:    User ptr for sde_drm_dim_layer_v1 struct
  */
-#ifdef CONFIG_DRM_SDE_EXPO
-static void _sde_crtc_set_dim_layer_v1(struct sde_crtc_state *cstate,
-		struct drm_crtc_state *state, void __user *usr_ptr)
-#else
 static void _sde_crtc_set_dim_layer_v1(struct drm_crtc *crtc,
 		struct sde_crtc_state *cstate, void __user *usr_ptr)
-#endif
 {
 	struct sde_drm_dim_layer_v1 dim_layer_v1;
 	struct sde_drm_dim_layer_cfg *user_cfg;
@@ -3163,9 +3158,9 @@ static void _sde_crtc_set_dim_layer_v1(struct drm_crtc *crtc,
 	u32 count, i, alpha;
 #else
 	u32 count, i;
-	struct sde_kms *kms;
 #endif
-
+	struct sde_kms *kms;
+	
 	if (!crtc || !cstate) {
 		SDE_ERROR("invalid crtc or cstate\n");
 		return;
@@ -3234,12 +3229,11 @@ static void _sde_crtc_set_dim_layer_v1(struct drm_crtc *crtc,
 #ifdef CONFIG_DRM_SDE_EXPO
 	alpha = sde_crtc_get_property(cstate, CRTC_PROP_DIM_LAYER_EXPO);
 	if (alpha) {
-		mode = &state->adjusted_mode;
+		mode = &crtc->state->adjusted_mode;
 		cstate->exposure_dim_layer = &dim_layer[count];
 		sde_crtc_build_dim_layer_expo(cstate->exposure_dim_layer, mode->hdisplay, mode->vdisplay, alpha);
 	}
 #endif
-    }
 }
 
 /**
@@ -6115,13 +6109,8 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 		_sde_crtc_set_input_fence_timeout(cstate);
 		break;
 	case CRTC_PROP_DIM_LAYER_V1:
-#ifdef CONFIG_DRM_SDE_EXPO
-		_sde_crtc_set_dim_layer_v1(cstate, state,
+		_sde_crtc_set_dim_layer_v1(crtc, cstate,
 					(void __user *)(uintptr_t)val);
-#else
-		_sde_crtc_set_dim_layer_v1(cstate,
-					(void __user *)(uintptr_t)val);
-#endif
 		break;
 	case CRTC_PROP_ROI_V1:
 		ret = _sde_crtc_set_roi_v1(state,
