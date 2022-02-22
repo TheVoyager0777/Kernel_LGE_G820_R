@@ -228,3 +228,11 @@ config LGE_DD_TEMP_BRINGUP
 	bool "LGE_DD_TEMP_BRINGUP"
 	help
 	TEMP DD bringup feature.
+
+config DSI_FEATURES
+	bool "Force enable ULPS and PHY poweroff"
+	depends on DRM_MSM
+	default n
+	help
+	  If features can't be enabled in the display drivers in arch/
+	  use this switch to force the use of ULPS and PHY poweroff.
