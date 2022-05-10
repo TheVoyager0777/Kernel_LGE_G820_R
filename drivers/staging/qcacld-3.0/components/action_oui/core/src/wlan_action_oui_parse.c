@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2018 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -86,7 +86,6 @@ static bool action_oui_string_to_hex(uint8_t *token, uint8_t *hex,
  *
  * Return: converted string
  */
-#ifdef WLAN_DEBUG
 static
 uint8_t *action_oui_token_string(enum action_oui_token_type token_id)
 {
@@ -104,7 +103,6 @@ uint8_t *action_oui_token_string(enum action_oui_token_type token_id)
 
 	return (uint8_t *) "UNKNOWN";
 }
-#endif
 
 /**
  * validate_and_convert_oui() - validate and convert OUI str to hex array
@@ -848,16 +846,12 @@ check_for_vendor_ap_capabilities(struct action_oui_extension *extension,
 		}
 	}
 
-	if (extension->info_mask & ACTION_OUI_INFO_AP_CAPABILITY_BAND) {
-		if ((*extension->capability &
-		    ACTION_OUI_CAPABILITY_2G_BAND_MASK) &&
-		    !attr->enable_2g)
-			return false;
-		if ((*extension->capability &
-		    ACTION_CAPABILITY_5G_BAND_MASK) &&
-		    !attr->enable_5g)
-			return false;
-	}
+	if (extension->info_mask & ACTION_OUI_INFO_AP_CAPABILITY_BAND &&
+	    ((attr->enable_5g &&
+	    !(*extension->capability & ACTION_CAPABILITY_5G_BAND_MASK)) ||
+	    (attr->enable_2g &&
+	    !(*extension->capability & ACTION_OUI_CAPABILITY_2G_BAND_MASK))))
+		return false;
 
 	return true;
 }
@@ -901,7 +895,6 @@ action_oui_search(struct action_oui_psoc_priv *psoc_priv,
 	qdf_mutex_acquire(&oui_priv->extension_lock);
 	if (qdf_list_empty(extension_list)) {
 		qdf_mutex_release(&oui_priv->extension_lock);
-		action_oui_debug("OUI List Empty");
 		return false;
 	}
 
@@ -917,44 +910,25 @@ action_oui_search(struct action_oui_psoc_priv *psoc_priv,
 		 * to other checks skipping the OUI and vendor data checks
 		 */
 
-		if (!(extension->info_mask & ACTION_OUI_INFO_OUI)) {
-			action_oui_debug("Wildcard OUI found");
+		if (!(extension->info_mask & ACTION_OUI_INFO_OUI))
 			wildcard_oui = true;
-		}
 
 		oui_ptr = action_oui_get_oui_ptr(extension, attr);
 
-		if (!oui_ptr  && !wildcard_oui) {
-			action_oui_debug("No matching IE found for OUI");
-			QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE,
-					   QDF_TRACE_LEVEL_DEBUG,
-					   extension->oui,
-					   extension->oui_length);
+		if (!oui_ptr  && !wildcard_oui)
 			goto next;
-		}
-
-		action_oui_debug("IE found for OUI");
-		QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE,
-				   QDF_TRACE_LEVEL_DEBUG,
-				   extension->oui,
-				   extension->oui_length);
 
 		if (extension->data_length && !wildcard_oui &&
-		    !check_for_vendor_oui_data(extension, oui_ptr)) {
-			action_oui_debug("Vendor IE Data mismatch");
+		    !check_for_vendor_oui_data(extension, oui_ptr))
 			goto next;
-		}
+
 
 		if ((extension->info_mask & ACTION_OUI_INFO_MAC_ADDRESS) &&
-		    !check_for_vendor_ap_mac(extension, attr)) {
-			action_oui_debug("Vendor IE MAC Mismatch");
+		    !check_for_vendor_ap_mac(extension, attr))
 			goto next;
-		}
 
-		if (!check_for_vendor_ap_capabilities(extension, attr)) {
-			action_oui_debug("Vendor IE capabilties mismatch");
+		if (!check_for_vendor_ap_capabilities(extension, attr))
 			goto next;
-		}
 
 		action_oui_debug("Vendor AP/STA found for OUI");
 		QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE, QDF_TRACE_LEVEL_DEBUG,
