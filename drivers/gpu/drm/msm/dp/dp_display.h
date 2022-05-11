@@ -18,6 +18,7 @@
 #include <linux/list.h>
 #include <drm/drmP.h>
 #include <drm/msm_drm.h>
+
 #include "dp_panel.h"
 
 #if IS_ENABLED(CONFIG_LGE_COVER_DISPLAY)
@@ -81,6 +82,8 @@ struct dp_display {
 	u32 max_vdisplay;
 	u32 no_mst_encoder;
 	void *dp_mst_prv_info;
+	bool is_bootsplash_en;
+
 #if IS_ENABLED(CONFIG_LGE_COVER_DISPLAY)
 	struct extcon_dev *dd_extcon_sdev[EXT_DD_MAX_COUNT];
 #endif
