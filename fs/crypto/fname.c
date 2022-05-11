@@ -380,8 +380,8 @@ int fscrypt_fname_disk_to_usr(const struct inode *inode,
 		     offsetof(struct fscrypt_nokey_name, sha256));
 	BUILD_BUG_ON(BASE64_CHARS(FSCRYPT_NOKEY_NAME_MAX) > NAME_MAX);
 
-	digested_name.hash = hash;
-	digested_name.mino_hash = minor_hash;
+	nokey_name.dirhash[0] = hash;
+	nokey_name.dirhash[1] = minor_hash;
 
 	if (iname->len <= sizeof(nokey_name.bytes)) {
 		memcpy(nokey_name.bytes, iname->name, iname->len);
