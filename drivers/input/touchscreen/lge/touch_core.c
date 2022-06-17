@@ -128,10 +128,34 @@ static void touch_report_event(struct touch_core_data *ts)
 					ts->tdata[i].width_minor);
 			input_report_abs(ts->input, ABS_MT_ORIENTATION,
 					ts->tdata[i].orientation);
+
+			if (press_mask & (1 << i)) {
+				if (hide_lockscreen_coord) {
+					TOUCH_I("%d finger pressed:<%d>(xxxx,xxxx,xxxx)\n",
+							ts->tcount, i);
+				} else {
+					TOUCH_I("%d finger pressed:<%d>(%4d,%4d,%4d)\n",
+							ts->tcount,
+							i,
+							ts->tdata[i].x,
+							ts->tdata[i].y,
+							ts->tdata[i].pressure);
+				}
+			}
 		} else if (release_mask & (1 << i)) {
 			input_mt_slot(ts->input, i);
 			//input_report_abs(ts->input, ABS_MT_TRACKING_ID, -1);
 			input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, false);
+			if (hide_lockscreen_coord) {
+				TOUCH_I(" finger released:<%d>(xxxx,xxxx,xxxx)\n",
+						i);
+			} else {
+				TOUCH_I(" finger released:<%d>(%4d,%4d,%4d)\n",
+						i,
+						ts->tdata[i].x,
+						ts->tdata[i].y,
+						ts->tdata[i].pressure);
+			}
 		}
 	}
 
@@ -191,12 +215,9 @@ irqreturn_t touch_irq_thread(int irq, void *dev_id)
 
 	TOUCH_TRACE();
 
-    pm_qos_update_request(&ts->pm_qos_req, 100);
 #if defined(CONFIG_SECURE_TOUCH)
-	if (secure_touch_filter_interrupt(ts) == IRQ_HANDLED) {
-	    pm_qos_update_request(&ts->pm_qos_req, PM_QOS_DEFAULT_VALUE);
+	if (secure_touch_filter_interrupt(ts) == IRQ_HANDLED)
 		return IRQ_HANDLED;
-    }
 #endif
 	if (ts->role.use_synaptics_touchcomm)
 		mutex_lock(&ts->irq_lock);
@@ -247,10 +268,10 @@ irqreturn_t touch_irq_thread(int irq, void *dev_id)
 			touch_send_uevent(ts, TOUCH_UEVENT_AI_PICK);
 
 		if (ts->intr_status & TOUCH_IRQ_SWIPE_LEFT2)
-			touch_send_uevent(ts, TOUCH_UEVENT_SWIPE_LEFT2);
+			touch_send_uevent(ts, TOUCH_UEVENT_SIDE_PAY);
 
 		if (ts->intr_status & TOUCH_IRQ_SWIPE_RIGHT2)
-			touch_send_uevent(ts, TOUCH_UEVENT_SWIPE_RIGHT2);
+			touch_send_uevent(ts, TOUCH_UEVENT_SIDE_PAY);
 
 		if (ts->intr_status & TOUCH_IRQ_LPWG_LONGPRESS_DOWN)
 			touch_send_uevent(ts, TOUCH_UEVENT_LPWG_LONGPRESS_DOWN);
@@ -289,8 +310,6 @@ irqreturn_t touch_irq_thread(int irq, void *dev_id)
 		mutex_unlock(&ts->irq_lock);
 	else
 		mutex_unlock(&ts->lock);
-	
-	pm_qos_update_request(&ts->pm_qos_req, PM_QOS_DEFAULT_VALUE);
 
 	return IRQ_HANDLED;
 }
@@ -480,13 +499,6 @@ static int touch_init_input(struct touch_core_data *ts)
 	set_bit(EV_KEY, input->evbit);
 	set_bit(BTN_TOUCH, input->keybit);
 	set_bit(BTN_TOOL_FINGER, input->keybit);
-	set_bit(KEY_WAKEUP, input->keybit);
-	set_bit(KEY_GESTURE_SWIPE_UP, input->keybit);
-	set_bit(KEY_GESTURE_SWIPE_DOWN, input->keybit);
-	set_bit(KEY_GESTURE_SWIPE_LEFT, input->keybit);
-	set_bit(KEY_GESTURE_SWIPE_RIGHT, input->keybit);
-	set_bit(KEY_GESTURE_SWIPE_LEFT2, input->keybit);
-	set_bit(KEY_GESTURE_SWIPE_RIGHT2, input->keybit);
 	set_bit(INPUT_PROP_DIRECT, input->propbit);
 	input_set_abs_params(input, ABS_MT_POSITION_X, 0,
 			ts->caps.max_x, 0, 0);
@@ -529,9 +541,6 @@ error:
 	return ret;
 }
 
-extern int tap2wake_status;
-extern int lpwg_status;
-
 static void touch_suspend(struct device *dev)
 {
 	struct touch_core_data *ts = to_touch_core(dev);
@@ -557,17 +566,6 @@ static void touch_suspend(struct device *dev)
 	if (0)
 		ret = md->m_driver.suspend(dev);
 	mutex_unlock(&ts->lock);
-	
-	if (ts->driver->lpwg) {
-	    int tap2wake_knocked[4] = { 0, 0, 1, 0 };
-	    tap2wake_knocked[0] = tap2wake_status;
-		mutex_lock(&ts->lock);
-		TOUCH_I("tap2wake %s\n", (tap2wake_status) ? "Enabled" : "Disabled");
-		ts->driver->lpwg(ts->dev, LPWG_MASTER, tap2wake_knocked);
-		lpwg_status = tap2wake_status;
-		mutex_unlock(&ts->lock);
-	}
-	
 	TOUCH_I("%s End\n", __func__);
 
 	if (ret == 1)
@@ -595,17 +593,6 @@ static void touch_resume(struct device *dev)
 	if (0)
 		ret = md->m_driver.resume(dev);
 	mutex_unlock(&ts->lock);
-
-    if (ts->driver->lpwg) {
-	    int tap2wake_knocked[4] = { 0, 1, 1, 0 };
-	    tap2wake_knocked[0] = tap2wake_status;
-		mutex_lock(&ts->lock);
-		TOUCH_I("tap2wake %s\n", (tap2wake_status) ? "Enabled" : "Disabled");
-		ts->driver->lpwg(ts->dev, LPWG_MASTER, tap2wake_knocked);
-		lpwg_status = tap2wake_status;
-		mutex_unlock(&ts->lock);
-	}
-
 	TOUCH_I("%s End\n", __func__);
 
 	if (ret == 0)
@@ -738,8 +725,6 @@ char *uevent_str[TOUCH_UEVENT_SIZE][2] = {
 	{"TOUCH_GESTURE_WAKEUP=SWIPE_UP", NULL},
 	{"TOUCH_GESTURE_WAKEUP=SWIPE_LEFT", NULL},
 	{"TOUCH_GESTURE_WAKEUP=SWIPE_RIGHT", NULL},
-	{"TOUCH_GESTURE_WAKEUP=SWIPE_LEFT2", NULL},
-	{"TOUCH_GESTURE_WAKEUP=SWIPE_RIGHT2", NULL},
 	{"TOUCH_GESTURE_WAKEUP=WATER_MODE_ON", NULL},
 	{"TOUCH_GESTURE_WAKEUP=WATER_MODE_OFF", NULL},
 	{"TOUCH_GESTURE_WAKEUP=AI_BUTTON", NULL},
@@ -774,60 +759,6 @@ void touch_send_uevent(struct touch_core_data *ts, int type)
 		touch_report_all_event(ts);
 	} else {
 		TOUCH_I("%s  is not sent\n", uevent_str[type][0]);
-	}
-	switch (type) {
-		case TOUCH_UEVENT_KNOCK:
-			input_report_key(ts->input, KEY_WAKEUP, 1);
-			TOUCH_I("Simulate power button depress\n");
-			input_sync(ts->input);
-			input_report_key(ts->input, KEY_WAKEUP, 0);
-			TOUCH_I("Simulate power button release\n");
-			input_sync(ts->input);
-			break;
-		case TOUCH_UEVENT_SWIPE_DOWN:
-			TOUCH_I("Swipe DOWN reported\n");
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_DOWN, 1);
-			input_sync(ts->input);
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_DOWN, 0);
-			input_sync(ts->input);
-			break;
-		case TOUCH_UEVENT_SWIPE_UP:
-			TOUCH_I("Swipe UP reported\n");
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_UP, 1);
-			input_sync(ts->input);
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_UP, 0);
-			input_sync(ts->input);
-			break;
-		case TOUCH_UEVENT_SWIPE_LEFT:
-			TOUCH_I("Swipe LEFT reported\n");
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_LEFT, 1);
-			input_sync(ts->input);
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_LEFT, 0);
-			input_sync(ts->input);
-			break;
-		case TOUCH_UEVENT_SWIPE_RIGHT:
-			TOUCH_I("Swipe RIGHT reported\n");
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_RIGHT, 1);
-			input_sync(ts->input);
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_RIGHT, 0);
-			input_sync(ts->input);
-			break;
-		case TOUCH_UEVENT_SWIPE_LEFT2:
-			TOUCH_I("Swipe LEFT2 reported\n");
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_LEFT2, 1);
-			input_sync(ts->input);
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_LEFT2, 0);
-			input_sync(ts->input);
-			break;
-		case TOUCH_UEVENT_SWIPE_RIGHT2:
-			TOUCH_I("Swipe RIGHT2 reported\n");
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_RIGHT2, 1);
-			input_sync(ts->input);
-			input_report_key(ts->input, KEY_GESTURE_SWIPE_RIGHT2, 0);
-			input_sync(ts->input);
-			break;
-		default:
-			break;
 	}
 }
 
@@ -1305,11 +1236,6 @@ static int touch_core_probe_normal(struct platform_device *pdev)
 		goto error_init_input;
 	}
 
-	ts->pm_qos_req.type = PM_QOS_REQ_AFFINE_IRQ;
-	ts->pm_qos_req.irq = ts->irq;
-    pm_qos_add_request(&ts->pm_qos_req, PM_QOS_CPU_DMA_LATENCY,
-			   PM_QOS_DEFAULT_VALUE);
-
 	ret = touch_request_irq(ts->irq, touch_irq_handler,
 			touch_irq_thread, ts->irqflags | IRQF_ONESHOT,
 			LGE_TOUCH_NAME, ts);
@@ -1335,7 +1261,6 @@ static int touch_core_probe_normal(struct platform_device *pdev)
 
 error_request_irq:
 	free_irq(ts->irq, ts);
-	pm_qos_remove_request(&ts->pm_qos_req);
 error_init_input:
 	if (ts->input) {
 		input_mt_destroy_slots(ts->input);

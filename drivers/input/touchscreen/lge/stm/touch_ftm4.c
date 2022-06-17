@@ -1068,7 +1068,6 @@ static void ftm4_get_swipe_info(struct device *dev)
 
 	TOUCH_TRACE();
 
-	ts->swipe[SWIPE_U].available = true;
 	ts->swipe[SWIPE_U].enable = false;
 	ts->swipe[SWIPE_U].debug_enable = false;
 	ts->swipe[SWIPE_U].distance = 20;
@@ -1083,7 +1082,7 @@ static void ftm4_get_swipe_info(struct device *dev)
 	ts->swipe[SWIPE_U].area.x2 = 1359;
 	ts->swipe[SWIPE_U].area.y2 = 2879;
 	ts->swipe[SWIPE_U].start_area.x1 = 439;
-	ts->swipe[SWIPE_U].start_area.y1 = 1441;
+	ts->swipe[SWIPE_U].start_area.y1 = 2557;
 	ts->swipe[SWIPE_U].start_area.x2 = 1000;
 	ts->swipe[SWIPE_U].start_area.y2 = 2879;
 	ts->swipe[SWIPE_U].border_area.x1 = 0;
@@ -1095,7 +1094,6 @@ static void ftm4_get_swipe_info(struct device *dev)
 	ts->swipe[SWIPE_U].start_border_area.x2 = 0;
 	ts->swipe[SWIPE_U].start_border_area.y2 = 0;
 
-	ts->swipe[SWIPE_D].available = true;
 	ts->swipe[SWIPE_D].enable = false;
 	ts->swipe[SWIPE_D].debug_enable = false;
 	ts->swipe[SWIPE_D].distance = 15;
@@ -1112,17 +1110,16 @@ static void ftm4_get_swipe_info(struct device *dev)
 	ts->swipe[SWIPE_D].start_area.x1 = 80;
 	ts->swipe[SWIPE_D].start_area.y1 = 0;
 	ts->swipe[SWIPE_D].start_area.x2 = 1359;
-	ts->swipe[SWIPE_D].start_area.y2 = 1439;
-	ts->swipe[SWIPE_D].border_area.x1 = 0;
-	ts->swipe[SWIPE_D].border_area.y1 = 0;
-	ts->swipe[SWIPE_D].border_area.x2 = 0;
-	ts->swipe[SWIPE_D].border_area.y2 = 0;
-	ts->swipe[SWIPE_D].start_border_area.x1 = 0;
-	ts->swipe[SWIPE_D].start_border_area.y1 = 0;
-	ts->swipe[SWIPE_D].start_border_area.x2 = 0;
-	ts->swipe[SWIPE_D].start_border_area.y2 = 0;
+	ts->swipe[SWIPE_D].start_area.y2 = 300;
+	ts->swipe[SWIPE_D].border_area.x1 = 30;
+	ts->swipe[SWIPE_D].border_area.y1 = 30;
+	ts->swipe[SWIPE_D].border_area.x2 = 30;
+	ts->swipe[SWIPE_D].border_area.y2 = 30;
+	ts->swipe[SWIPE_D].start_border_area.x1 = 30;
+	ts->swipe[SWIPE_D].start_border_area.y1 = 30;
+	ts->swipe[SWIPE_D].start_border_area.x2 = 30;
+	ts->swipe[SWIPE_D].start_border_area.y2 = 30;
 
-	ts->swipe[SWIPE_R].available = true;
 	ts->swipe[SWIPE_R].enable = false;
 	ts->swipe[SWIPE_R].debug_enable = false;
 	ts->swipe[SWIPE_R].distance = 7;
@@ -1140,16 +1137,15 @@ static void ftm4_get_swipe_info(struct device *dev)
 	ts->swipe[SWIPE_R].start_area.y1 = 0;
 	ts->swipe[SWIPE_R].start_area.x2 = 1439;
 	ts->swipe[SWIPE_R].start_area.y2 = 300;
-	ts->swipe[SWIPE_R].border_area.x1 = 0;
-	ts->swipe[SWIPE_R].border_area.y1 = 0;
-	ts->swipe[SWIPE_R].border_area.x2 = 0;
-	ts->swipe[SWIPE_R].border_area.y2 = 0;
-	ts->swipe[SWIPE_R].start_border_area.x1 = 0;
-	ts->swipe[SWIPE_R].start_border_area.y1 = 0;
-	ts->swipe[SWIPE_R].start_border_area.x2 = 0;
-	ts->swipe[SWIPE_R].start_border_area.y2 = 0;
+	ts->swipe[SWIPE_R].border_area.x1 = 200;
+	ts->swipe[SWIPE_R].border_area.y1 = 100;
+	ts->swipe[SWIPE_R].border_area.x2 = 200;
+	ts->swipe[SWIPE_R].border_area.y2 = 400;
+	ts->swipe[SWIPE_R].start_border_area.x1 = 100;
+	ts->swipe[SWIPE_R].start_border_area.y1 = 100;
+	ts->swipe[SWIPE_R].start_border_area.x2 = 100;
+	ts->swipe[SWIPE_R].start_border_area.y2 = 200;
 
-	ts->swipe[SWIPE_L].available = true;
 	ts->swipe[SWIPE_L].enable = false;
 	ts->swipe[SWIPE_L].debug_enable = false;
 	ts->swipe[SWIPE_L].distance = 7;
@@ -1167,17 +1163,14 @@ static void ftm4_get_swipe_info(struct device *dev)
 	ts->swipe[SWIPE_L].start_area.y1 = 0;
 	ts->swipe[SWIPE_L].start_area.x2 = 1439;
 	ts->swipe[SWIPE_L].start_area.y2 = 300;
-	ts->swipe[SWIPE_L].border_area.x1 = 0;
-	ts->swipe[SWIPE_L].border_area.y1 = 0;
-	ts->swipe[SWIPE_L].border_area.x2 = 0;
-	ts->swipe[SWIPE_L].border_area.y2 = 0;
-	ts->swipe[SWIPE_L].start_border_area.x1 = 0;
-	ts->swipe[SWIPE_L].start_border_area.y1 = 0;
-	ts->swipe[SWIPE_L].start_border_area.x2 = 0;
-	ts->swipe[SWIPE_L].start_border_area.y2 = 0;
-
-	ts->swipe[SWIPE_L2].available = false;
-	ts->swipe[SWIPE_R2].available = false;
+	ts->swipe[SWIPE_L].border_area.x1 = 200;
+	ts->swipe[SWIPE_L].border_area.y1 = 100;
+	ts->swipe[SWIPE_L].border_area.x2 = 200;
+	ts->swipe[SWIPE_L].border_area.y2 = 400;
+	ts->swipe[SWIPE_L].start_border_area.x1 = 100;
+	ts->swipe[SWIPE_L].start_border_area.y1 = 100;
+	ts->swipe[SWIPE_L].start_border_area.x2 = 100;
+	ts->swipe[SWIPE_L].start_border_area.y2 = 200;
 }
 
 static void ftm4_get_lpwg_abs_info(struct device *dev)
