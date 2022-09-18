@@ -904,5 +904,12 @@ config HSWAP
 		lowmemorykiller and direct reclaim module use low priority swap file.
 		lowmemorykiller reclaims pages of victim process instead kill the process.
 
+config HYPERHOLD
+        bool "Enable HyperHold"
+        default y
+        depends on MEMCG
+        help
+          HyperHold is a intelligent memory management solution.
+
 source "mm/damon/Kconfig"
 

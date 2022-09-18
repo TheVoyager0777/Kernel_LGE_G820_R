@@ -37,6 +37,9 @@
 #include <linux/compaction.h>
 #include <linux/device.h>
 #include <linux/rmap.h>
+#ifdef CONFIG_HYPERHOLD
+#include <linux/memcg_policy.h>
+#endif
 
 #include <asm/tlbflush.h>
 

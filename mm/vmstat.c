@@ -1228,6 +1228,18 @@ const char * const vmstat_text[] = {
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 	"speculative_pgfault"
 #endif
+#ifdef CONFIG_HYPERHOLD
+	"kswapd_reclaimed_anon",
+	"kswapd_reclaimed_file",
+	"kswapd_scan_anon",
+	"kswapd_scan_file",
+	"dr_reclaimed_anon",
+	"dr_reclaimed_file",
+	"dr_scan_anon",
+	"dr_scan_file",
+	"freeze_reclaim_times",
+	"freeze_reclaimed",
+#endif
 #endif /* CONFIG_VM_EVENT_COUNTERS */
 };
 #endif /* CONFIG_PROC_FS || CONFIG_SYSFS || CONFIG_NUMA */

@@ -306,6 +306,17 @@ struct vma_swap_readahead {
 #endif
 };
 
+#ifdef CONFIG_HYPERHOLD_FILE_LRU
+static inline struct lruvec *hp_lruvec(struct lruvec *lruvec,
+				       struct page *page,
+				       struct pglist_data *pgdat)
+{
+	if (!is_prot_page(page))
+		return node_lruvec(pgdat);
+	return lruvec;
+}
+#endif
+
 /* linux/mm/workingset.c */
 void *workingset_eviction(struct address_space *mapping, struct page *page);
 void workingset_refault(struct page *page, void *shadow);

@@ -262,30 +262,26 @@ void rotate_reclaimable_page(struct page *page)
 	}
 }
 
-void lru_note_cost(struct lruvec *lruvec, enum lru_cost_type cost,
-		  bool file, unsigned int nr_pages)
+static void update_page_reclaim_stat(struct lruvec *lruvec,
+				     int file, int rotated)
 {
-	if (cost == COST_IO) {
-		/*
-		 * Reflect the relative reclaim cost between incurring
-		 * IO from refaults on one hand, and incurring CPU
-		 * cost from rotating scanned pages on the other.
-		 *
-		 * XXX: For now, the relative cost factor for IO is
-		 * set statically to outweigh the cost of rotating
-		 * referenced pages. This might change with ultra-fast
-		 * IO devices, or with secondary memory devices that
-		 * allow users continued access of swapped out pages.
-		 *
-		 * Until then, the value is chosen simply such that we
-		 * balance for IO cost first and optimize for CPU only
-		 * once the thrashing subsides.
-		 */
-		nr_pages *= SWAP_CLUSTER_MAX;
-	}
+	struct zone_reclaim_stat *reclaim_stat = &lruvec->reclaim_stat;
+#ifdef CONFIG_HYPERHOLD_FILE_LRU
+	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+	struct zone_reclaim_stat *node_reclaim_stat;
 
-	lruvec->balance.numer[file] += nr_pages;
-	lruvec->balance.denom += nr_pages;
+	node_reclaim_stat = &pgdat->lruvec.reclaim_stat;
+	if (!file)
+		node_reclaim_stat->recent_scanned[0]++;
+#endif
+	reclaim_stat->recent_scanned[file]++;
+	if (rotated) {
+		reclaim_stat->recent_rotated[file]++;
+#ifdef CONFIG_HYPERHOLD_FILE_LRU
+		if (!file)
+			node_reclaim_stat->recent_rotated[0]++;
+#endif
+	}
 }
 
 static void __activate_page(struct page *page, struct lruvec *lruvec,
@@ -950,28 +946,15 @@ void lru_add_page_tail(struct page *page, struct page *page_tail,
 static void __pagevec_lru_add_fn(struct page *page, struct lruvec *lruvec,
 				 void *arg)
 {
-	unsigned int nr_pages = hpage_nr_pages(page);
+	int file = page_is_file_cache(page);
+	int active = PageActive(page);
 	enum lru_list lru = page_lru(page);
-	bool active = is_active_lru(lru);
-	bool file = is_file_lru(lru);
-	bool new = (bool)arg;
 
 	VM_BUG_ON_PAGE(PageLRU(page), page);
 
 	SetPageLRU(page);
 	add_page_to_lru_list(page, lruvec, lru);
-
-	if (new) {
-		/*
-		 * If the workingset is thrashing, note the IO cost of
-		 * reclaiming that list and steer reclaim away from it.
-		 */
-		if (PageWorkingset(page))
-			lru_note_cost(lruvec, COST_IO, file, nr_pages);
-		else if (active)
-			SetPageWorkingset(page);
-	}
-
+	update_page_reclaim_stat(lruvec, file, active);
 	trace_mm_lru_insertion(page, lru);
 }
 
