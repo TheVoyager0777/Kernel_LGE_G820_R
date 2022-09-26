@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2017 Google, Inc.
  *
@@ -11,10 +12,8 @@
  * GNU General Public License for more details.
  *
  */
-
 #ifndef _LINUX_BINDER_ALLOC_H
 #define _LINUX_BINDER_ALLOC_H
-
 #include <linux/rbtree.h>
 #include <linux/list.h>
 #include <linux/mm.h>
@@ -23,10 +22,8 @@
 #include <linux/slab.h>
 #include <linux/list_lru.h>
 #include <uapi/linux/android/binder.h>
-
 extern struct list_lru binder_alloc_lru;
 struct binder_transaction;
-
 /**
  * struct binder_buffer - buffer used for binder transactions
  * @entry:              entry alloc->buffers
@@ -58,9 +55,7 @@ struct binder_buffer {
 	unsigned async_transaction:1;
 	unsigned oneway_spam_suspect:1;
 	unsigned debug_id:27;
-
 	struct binder_transaction *transaction;
-
 	struct binder_node *target_node;
 	size_t data_size;
 	size_t offsets_size;
@@ -68,7 +63,6 @@ struct binder_buffer {
 	void __user *user_data;
 	int    pid;
 };
-
 /**
  * struct binder_lru_page - page object used for binder shrinker
  * @page_ptr: pointer to physical page in mmap'd space
@@ -80,7 +74,6 @@ struct binder_lru_page {
 	struct page *page_ptr;
 	struct binder_alloc *alloc;
 };
-
 /**
  * struct binder_alloc - per-binder proc state for binder allocator
  * @vma:                vm_area_struct passed to mmap_handler
@@ -123,7 +116,6 @@ struct binder_alloc {
 	size_t pages_high;
 	bool oneway_spam_detected;
 };
-
 #ifdef CONFIG_ANDROID_BINDER_IPC_SELFTEST
 void binder_selftest_alloc(struct binder_alloc *alloc);
 #else
@@ -154,9 +146,6 @@ extern void binder_alloc_print_allocated(struct seq_file *m,
 					 struct binder_alloc *alloc);
 void binder_alloc_print_pages(struct seq_file *m,
 			      struct binder_alloc *alloc);
-extern int binder_buffer_pool_create(void);
-extern void binder_buffer_pool_destroy(void);
-
 /**
  * binder_alloc_get_free_async_space() - get free space available for async
  * @alloc:	binder_alloc for this proc
@@ -167,31 +156,25 @@ static inline size_t
 binder_alloc_get_free_async_space(struct binder_alloc *alloc)
 {
 	size_t free_async_space;
-
 	mutex_lock(&alloc->mutex);
 	free_async_space = alloc->free_async_space;
 	mutex_unlock(&alloc->mutex);
 	return free_async_space;
 }
-
 unsigned long
 binder_alloc_copy_user_to_buffer(struct binder_alloc *alloc,
 				 struct binder_buffer *buffer,
 				 binder_size_t buffer_offset,
 				 const void __user *from,
 				 size_t bytes);
-
-void binder_alloc_copy_to_buffer(struct binder_alloc *alloc,
-				 struct binder_buffer *buffer,
-				 binder_size_t buffer_offset,
-				 void *src,
-				 size_t bytes);
-
-void binder_alloc_copy_from_buffer(struct binder_alloc *alloc,
-				   void *dest,
-				   struct binder_buffer *buffer,
-				   binder_size_t buffer_offset,
-				   size_t bytes);
-
+int binder_alloc_copy_to_buffer(struct binder_alloc *alloc,
+				struct binder_buffer *buffer,
+				binder_size_t buffer_offset,
+				void *src,
+				size_t bytes);
+int binder_alloc_copy_from_buffer(struct binder_alloc *alloc,
+				  void *dest,
+				  struct binder_buffer *buffer,
+				  binder_size_t buffer_offset,
+				  size_t bytes);
 #endif /* _LINUX_BINDER_ALLOC_H */
-
