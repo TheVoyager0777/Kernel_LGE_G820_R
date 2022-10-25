@@ -244,7 +244,7 @@ static inline unsigned long em_cpu_energy(struct em_perf_domain *pd,
 	ps = &pd->table[pd->nr_perf_states - 1];
 
 	max_util = map_util_perf(max_util);
-	max_util = min(max_util, allowed_cpu_cap);
+	max_util = max_util;
 	freq = map_util_freq(max_util, ps->frequency, scale_cpu);
 
 	/*
@@ -335,8 +335,7 @@ static inline struct em_perf_domain *em_pd_get(struct device *dev)
 	return NULL;
 }
 static inline unsigned long em_cpu_energy(struct em_perf_domain *pd,
-			unsigned long max_util, unsigned long sum_util,
-			unsigned long allowed_cpu_cap)
+			unsigned long max_util, unsigned long sum_util)
 {
 	return 0;
 }

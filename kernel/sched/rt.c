@@ -564,8 +564,11 @@ static void sched_rt_rq_dequeue(struct rt_rq *rt_rq)
 
 	rt_se = rt_rq->tg->rt_se[cpu];
 
-	if (!rt_se)
+	if (!rt_se) {
 		dequeue_top_rt_rq(rt_rq);
+		/* Kick cpufreq (see the comment in kernel/sched/sched.h). */
+		cpufreq_update_util(rq_of_rt_rq(rt_rq), 0);
+	}
 	else if (on_rt_rq(rt_se))
 		dequeue_rt_entity(rt_se, 0);
 }
@@ -1073,16 +1076,15 @@ static void update_curr_rt(struct rq *rq)
 	struct task_struct *curr = rq->curr;
 	struct sched_rt_entity *rt_se = &curr->rt;
 	u64 delta_exec;
+	u64 now;
 
 	if (curr->sched_class != &rt_sched_class)
 		return;
 
-	delta_exec = rq_clock_task(rq) - curr->se.exec_start;
+	now = rq_clock_task(rq);
+	delta_exec = now - curr->se.exec_start;
 	if (unlikely((s64)delta_exec <= 0))
 		return;
-
-	/* Kick cpufreq (see the comment in kernel/sched/sched.h). */
-	cpufreq_update_util(rq, SCHED_CPUFREQ_RT);
 
 	schedstat_set(curr->se.statistics.exec_max,
 		      max(curr->se.statistics.exec_max, delta_exec));
@@ -1090,27 +1092,20 @@ static void update_curr_rt(struct rq *rq)
 	curr->se.sum_exec_runtime += delta_exec;
 	account_group_exec_runtime(curr, delta_exec);
 
-	curr->se.exec_start = rq_clock_task(rq);
-	cpuacct_charge(curr, delta_exec);
-
-	sched_rt_avg_update(rq, delta_exec);
+	curr->se.exec_start = now;
 
 	if (!rt_bandwidth_enabled())
 		return;
 
 	for_each_sched_rt_entity(rt_se) {
 		struct rt_rq *rt_rq = rt_rq_of_se(rt_se);
-		int exceeded;
 
 		if (sched_rt_runtime(rt_rq) != RUNTIME_INF) {
 			raw_spin_lock(&rt_rq->rt_runtime_lock);
 			rt_rq->rt_time += delta_exec;
-			exceeded = sched_rt_runtime_exceeded(rt_rq);
-			if (exceeded)
+			if (sched_rt_runtime_exceeded(rt_rq))
 				resched_curr(rq);
 			raw_spin_unlock(&rt_rq->rt_runtime_lock);
-			if (exceeded)
-				do_start_rt_bandwidth(sched_rt_bandwidth(rt_rq));
 		}
 	}
 }
@@ -1140,11 +1135,17 @@ enqueue_top_rt_rq(struct rt_rq *rt_rq)
 
 	if (rt_rq->rt_queued)
 		return;
-	if (rt_rq_throttled(rt_rq) || !rt_rq->rt_nr_running)
+
+	if (rt_rq_throttled(rt_rq))
 		return;
 
-	add_nr_running(rq, rt_rq->rt_nr_running);
-	rt_rq->rt_queued = 1;
+	if (rt_rq->rt_nr_running) {
+		add_nr_running(rq, rt_rq->rt_nr_running);
+		rt_rq->rt_queued = 1;
+	}
+
+	/* Kick cpufreq (see the comment in kernel/sched/sched.h). */
+	cpufreq_update_util(rq, 0);
 }
 
 #if defined CONFIG_SMP
@@ -1467,8 +1468,9 @@ enqueue_task_rt(struct rq *rq, struct task_struct *p, int flags)
 {
 	struct sched_rt_entity *rt_se = &p->rt;
 
+#ifdef CONFIG_SCHED_TUNE
 	schedtune_enqueue_task(p, cpu_of(rq));
-
+#endif
 	if (flags & ENQUEUE_WAKEUP)
 		rt_se->timeout = 0;
 
@@ -1483,8 +1485,9 @@ static void dequeue_task_rt(struct rq *rq, struct task_struct *p, int flags)
 {
 	struct sched_rt_entity *rt_se = &p->rt;
 
+#ifdef CONFIG_SCHED_TUNE
 	schedtune_dequeue_task(p, cpu_of(rq));
-
+#endif
 	update_curr_rt(rq);
 	dequeue_rt_entity(rt_se, flags);
 	walt_dec_cumulative_runnable_avg(rq, p);
@@ -1652,6 +1655,78 @@ static void check_preempt_equal_prio(struct rq *rq, struct task_struct *p)
 	resched_curr(rq);
 }
 
+#ifdef CONFIG_SCHED_WALT
+#define WALT_RT_PULL_THRESHOLD_NS	250000
+static struct task_struct *pick_highest_pushable_task(struct rq *rq, int cpu);
+static void try_pull_rt_task(struct rq *this_rq)
+{
+	int i, this_cpu = this_rq->cpu, src_cpu = this_cpu;
+	struct rq *src_rq;
+	struct task_struct *p;
+
+	if (sched_rt_runnable(this_rq))
+		return;
+
+	for_each_possible_cpu(i) {
+		struct rq *rq = cpu_rq(i);
+
+		if (!has_pushable_tasks(rq))
+			continue;
+
+		src_cpu = i;
+		break;
+	}
+
+	if (src_cpu == this_cpu)
+		return;
+
+	src_rq = cpu_rq(src_cpu);
+	double_lock_balance(this_rq, src_rq);
+
+	/* lock is dropped, so check again */
+	if (sched_rt_runnable(this_rq))
+		goto unlock;
+
+	p = pick_highest_pushable_task(src_rq, this_cpu);
+
+	if (!p)
+		goto unlock;
+
+	if (sched_ktime_clock() - p->last_wake_ts <
+				WALT_RT_PULL_THRESHOLD_NS)
+		goto unlock;
+
+	deactivate_task(src_rq, p, 0);
+	set_task_cpu(p, this_cpu);
+	activate_task(this_rq, p, 0);
+unlock:
+	double_unlock_balance(this_rq, src_rq);
+}
+#endif
+
+static int balance_rt(struct rq *rq, struct task_struct *p, struct rq_flags *rf)
+{
+	if (!on_rt_rq(&p->rt) && need_pull_rt_task(rq, p)) {
+		/*
+		 * This is OK, because current is on_cpu, which avoids it being
+		 * picked for load-balance and preemption/IRQs are still
+		 * disabled avoiding further scheduler activity on it and we've
+		 * not yet started the picking loop.
+		 */
+		rq_unpin_lock(rq, rf);
+#ifndef CONFIG_SCHED_WALT
+		pull_rt_task(rq);
+#else
+		if (rt_overloaded(rq))
+			pull_rt_task(rq);
+		else
+			try_pull_rt_task(rq);
+#endif
+		rq_repin_lock(rq, rf);
+	}
+
+	return sched_stop_runnable(rq) || sched_dl_runnable(rq) || sched_rt_runnable(rq);
+}
 #endif /* CONFIG_SMP */
 
 /*
@@ -2672,8 +2747,8 @@ const struct sched_class rt_sched_class = {
 	.put_prev_task		= put_prev_task_rt,
 
 #ifdef CONFIG_SMP
+	.balance		= balance_rt,
 	.select_task_rq		= select_task_rq_rt,
-
 	.set_cpus_allowed       = set_cpus_allowed_common,
 	.rq_online              = rq_online_rt,
 	.rq_offline             = rq_offline_rt,

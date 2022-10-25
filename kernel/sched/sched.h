@@ -21,7 +21,7 @@
 #include <linux/sched/cputime.h>
 #include <linux/sched/init.h>
 #include <linux/sched/smt.h>
-
+#include <linux/energy_model.h>
 #include <linux/u64_stats_sync.h>
 #include <linux/kernel_stat.h>
 #include <linux/binfmts.h>
@@ -69,6 +69,7 @@ struct walt_sched_stats {
 	int nr_big_tasks;
 	u64 cumulative_runnable_avg_scaled;
 	u64 pred_demands_sum_scaled;
+	unsigned int nr_rtg_high_prio_tasks;
 };
 
 struct group_cpu_time {
@@ -775,6 +776,12 @@ struct root_domain {
 
 	/* Maximum cpu capacity in the system. */
 	struct max_cpu_capacity max_cpu_capacity;
+
+	/*
+	 * NULL-terminated list of performance domains intersecting with the
+	 * CPUs of the rd. Protected by RCU.
+	 */
+	struct perf_domain __rcu *pd;
 
 	/* First cpu with maximum and minimum original capacity */
 	int max_cap_orig_cpu, min_cap_orig_cpu;
@@ -1764,6 +1771,7 @@ struct sched_class {
 	void (*put_prev_task) (struct rq *rq, struct task_struct *p);
 
 #ifdef CONFIG_SMP
+	int (*balance)(struct rq *rq, struct task_struct *prev, struct rq_flags *rf);
 	int  (*select_task_rq)(struct task_struct *p, int task_cpu, int sd_flag, int flags,
 			       int subling_count_hint);
 	void (*migrate_task_rq)(struct task_struct *p);
@@ -1836,6 +1844,25 @@ extern const struct sched_class rt_sched_class;
 extern const struct sched_class fair_sched_class;
 extern const struct sched_class idle_sched_class;
 
+static inline bool sched_stop_runnable(struct rq *rq)
+{
+	return rq->stop && task_on_rq_queued(rq->stop);
+}
+
+static inline bool sched_dl_runnable(struct rq *rq)
+{
+	return rq->dl.dl_nr_running > 0;
+}
+
+static inline bool sched_rt_runnable(struct rq *rq)
+{
+	return rq->rt.rt_queued > 0;
+}
+
+static inline bool sched_fair_runnable(struct rq *rq)
+{
+	return rq->cfs.nr_running > 0;
+}
 
 #ifdef CONFIG_SMP
 
@@ -2072,6 +2099,25 @@ unsigned long arch_scale_cpu_capacity(struct sched_domain *sd, int cpu)
 		return sd->smt_gain / sd->span_weight;
 
 	return SCHED_CAPACITY_SCALE;
+}
+#endif
+
+#ifdef CONFIG_SCHED_WALT
+static inline int per_task_boost(struct task_struct *p)
+{
+	if (p->boost_period) {
+		if (sched_clock() > p->boost_expires) {
+			p->boost_period = 0;
+			p->boost_expires = 0;
+			p->boost = 0;
+		}
+	}
+	return p->boost;
+}
+#else
+static inline int per_task_boost(struct task_struct *p)
+{
+	return 0;
 }
 #endif
 
@@ -2755,6 +2801,18 @@ walt_task_in_cum_window_demand(struct rq *rq, struct task_struct *p)
 #define arch_scale_freq_invariant()	(false)
 #endif
 
+#define perf_domain_span(pd) (to_cpumask(((pd)->em_pd->cpus)))
+
+#ifdef CONFIG_SMP
+static DEFINE_STATIC_KEY_FALSE(sched_energy_present);
+extern struct static_key_false sched_energy_present;
+#endif
+
+static inline bool sched_energy_enabled(void)
+{
+	return static_branch_likely(&sched_energy_present);
+}
+
 enum sched_boost_policy {
 	SCHED_BOOST_NONE,
 	SCHED_BOOST_ON_BIG,
@@ -2873,6 +2931,16 @@ static inline bool task_in_related_thread_group(struct task_struct *p)
 	return !!(rcu_access_pointer(p->grp) != NULL);
 }
 
+static inline bool task_rtg_high_prio(struct task_struct *p)
+{
+	return task_in_related_thread_group(p) & (p->prio <= 99);
+}
+
+static inline bool walt_low_latency_task(struct task_struct *p)
+{
+	return task_rtg_high_prio(p) & (task_util(p) < 0);
+}
+
 static inline
 struct related_thread_group *task_related_thread_group(struct task_struct *p)
 {
@@ -2905,6 +2973,17 @@ extern unsigned int sched_boost_type;
 static inline int sched_boost(void)
 {
 	return sched_boost_type;
+}
+
+static inline bool rt_boost_on_big(void)
+{
+	return sched_boost() == FULL_THROTTLE_BOOST ?
+			(sched_boost_policy() == SCHED_BOOST_ON_BIG) : false;
+}
+
+static inline bool is_full_throttle_boost(void)
+{
+	return sched_boost() == FULL_THROTTLE_BOOST;
 }
 
 extern int preferred_cluster(struct sched_cluster *cluster,
@@ -3172,3 +3251,6 @@ static inline void sched_irq_work_queue(struct irq_work *work)
 }
 #endif
 
+extern bool task_fits_max(struct task_struct *p, int cpu);
+extern bool get_rtg_status(struct task_struct *p);
+extern bool is_many_wakeup(int sibling_count_hint);

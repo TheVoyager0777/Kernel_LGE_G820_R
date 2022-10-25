@@ -2255,10 +2255,99 @@ static void walt_cpus_capacity_changed(const cpumask_t *cpus)
 
 
 struct sched_cluster *sched_cluster[NR_CPUS];
-static int num_sched_clusters;
+int num_sched_clusters;
+
+__read_mostly cpumask_t **cpu_array;
 
 struct list_head cluster_head;
 cpumask_t asym_cap_sibling_cpus = CPU_MASK_NONE;
+
+static cpumask_t **init_cpu_array(void)
+{
+	int i;
+	cpumask_t **tmp_array;
+
+	tmp_array = kcalloc(num_sched_clusters, sizeof(cpumask_t *),
+			GFP_ATOMIC);
+	if (!tmp_array)
+		return NULL;
+	for (i = 0; i < num_sched_clusters; i++) {
+		tmp_array[i] = kcalloc(num_sched_clusters, sizeof(cpumask_t),
+			GFP_ATOMIC);
+		if (!tmp_array[i])
+			return NULL;
+	}
+
+	return tmp_array;
+}
+
+static cpumask_t **build_cpu_array(void)
+{
+	int i;
+	cpumask_t **tmp_array = init_cpu_array();
+
+	if (!tmp_array)
+		return NULL;
+
+	/*Construct cpu_array row by row*/
+	for (i = 0; i < num_sched_clusters; i++) {
+		int j, k = 1;
+
+		/* Fill out first column with appropriate cpu arrays*/
+		cpumask_copy(&tmp_array[i][0], &sched_cluster[i]->cpus);
+
+		/*
+		 * k starts from column 1 because 0 is filled
+		 * Fill clusters for the rest of the row,
+		 * above i in ascending order
+		 */
+		for (j = i + 1; j < num_sched_clusters; j++) {
+			cpumask_copy(&tmp_array[i][k],
+					&sched_cluster[j]->cpus);
+			k++;
+		}
+
+		/*
+		 * k starts from where we left off above.
+		 * Fill clusters below i in descending order.
+		 */
+		for (j = i - 1; j >= 0; j--) {
+			cpumask_copy(&tmp_array[i][k],
+					&sched_cluster[j]->cpus);
+			k++;
+		}
+	}
+	return tmp_array;
+}
+
+static int build_array(struct notifier_block *nb,
+			   unsigned long val,
+			   void *data)
+{
+	cpumask_t **tmp;
+
+	tmp = build_cpu_array();
+	if (!tmp) {
+		BUG_ON(1);
+	}
+
+	return 0;
+}
+
+static struct notifier_block init_cpu_capacity_notifier = {
+	.notifier_call = build_array,
+};
+
+static int __init register_cpufreq_notifier(void)
+{
+	int ret;
+
+	ret = cpufreq_register_notifier(&init_cpu_capacity_notifier,
+					CPUFREQ_POLICY_NOTIFIER);
+
+	return ret;
+}
+core_initcall(register_cpufreq_notifier);
 
 static struct sched_cluster init_cluster = {
 	.list			=	LIST_HEAD_INIT(init_cluster.list),
@@ -3901,3 +3990,41 @@ unlock_mutex:
 	return ret;
 }
 #endif
+
+static inline bool _walt_can_migrate_task(struct task_struct *p, int dst_cpu,
+					  bool to_lower, bool force)
+{
+	struct rq *rq = task_rq(p);
+
+	/* Don't detach task if it is under active migration */
+	if (rq->push_task == p)
+		return false;
+
+	if (to_lower) {
+		if (p->in_iowait)
+			return false;
+		if (per_task_boost(p) == TASK_BOOST_STRICT_MAX &&
+				task_in_related_thread_group(p))
+			return false;
+		if (!force && get_rtg_status(p))
+			return false;
+		if (!force && !task_fits_max(p, dst_cpu))
+			return false;
+	}
+
+	return true;
+}
+
+void walt_can_migrate_task(struct task_struct *p,
+				  int dst_cpu, int *can_migrate)
+{
+	bool to_lower;
+
+	to_lower = capacity_orig_of(dst_cpu) < capacity_orig_of(task_cpu(p));
+
+	if (_walt_can_migrate_task(p, dst_cpu, to_lower, true))
+		return;
+
+	*can_migrate = 0;
+}
+
