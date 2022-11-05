@@ -1886,7 +1886,8 @@ retry:
 
 			util = cpu_util(cpu);
 
-			lt = walt_nr_rtg_high_prio(cpu);
+			lt = (walt_low_latency_task(cpu_rq(cpu)->curr) ||
+				walt_nr_rtg_high_prio(cpu));
 
 			/*
 			 * When the best is suitable and the current is not,
